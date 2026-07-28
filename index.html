@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>Open House Sign In</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Open House">
+<meta name="theme-color" content="#003DA5">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.png">
+<style>
+  :root{
+    --remax-red:#DC1C2E;
+    --remax-blue:#003DA5;
+    --ink:#12233b;
+    --muted:#5b6b80;
+    --line:#d6dde6;
+    --bg:#f4f6f9;
+    --field:#ffffff;
+    --radius:14px;
+  }
+
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;margin:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--ink);
+    -webkit-text-size-adjust:100%;
+    overscroll-behavior:none;
+  }
+  button,input{font-family:inherit;}
+
+  .screen{display:none;min-height:100%;flex-direction:column;}
+  .screen.active{display:flex;}
+
+  /* ---------- Branding bar ---------- */
+  .brandbar{
+    background:var(--remax-blue);
+    color:#fff;
+    padding:calc(env(safe-area-inset-top) + 18px) 28px 18px;
+    display:flex;
+    align-items:center;
+    gap:18px;
+    flex:none;
+  }
+  .balloon{width:52px;height:52px;flex:none;display:block;}
+  .brandtext{line-height:1.15;}
+  .brandtext .b1{
+    font-size:15px;letter-spacing:.22em;text-transform:uppercase;
+    font-weight:700;color:rgba(255,255,255,.82);
+  }
+  .brandtext .b2{
+    font-size:26px;font-weight:800;letter-spacing:-.01em;margin-top:3px;
+  }
+  .logohit{
+    margin-left:auto;width:64px;height:56px;border:0;background:transparent;
+    cursor:pointer;
+  }
+  .stripe{height:6px;background:linear-gradient(90deg,var(--remax-red) 0 34%,#fff 34% 66%,var(--remax-blue) 66% 100%);flex:none;}
+
+  /* ---------- Setup screen ---------- */
+  .setup-wrap{
+    flex:1;display:flex;align-items:flex-start;justify-content:center;
+    padding:40px 24px calc(env(safe-area-inset-bottom) + 40px);
+    overflow-y:auto;-webkit-overflow-scrolling:touch;
+  }
+  .card{
+    width:100%;max-width:720px;background:#fff;border-radius:20px;
+    box-shadow:0 8px 30px rgba(18,35,59,.10);padding:36px 36px 40px;
+  }
+  .card h1{font-size:30px;margin:0 0 6px;letter-spacing:-.02em;}
+  .card .sub{color:var(--muted);font-size:18px;margin:0 0 30px;}
+
+  label{display:block;font-size:15px;font-weight:700;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 8px;}
+  .field{margin-bottom:24px;}
+  .row{display:flex;gap:20px;}
+  .row .field{flex:1;}
+
+  input[type=text],input[type=tel],input[type=email],input[type=date],input[type=time],input[type=password]{
+    width:100%;background:var(--field);border:2px solid var(--line);
+    border-radius:var(--radius);padding:16px 18px;font-size:21px;color:var(--ink);
+    appearance:none;-webkit-appearance:none;min-height:60px;
+  }
+  input:focus{outline:none;border-color:var(--remax-blue);}
+  input::placeholder{color:#9aa8b8;}
+
+  .btn{
+    display:block;width:100%;border:0;border-radius:var(--radius);
+    padding:20px;font-size:22px;font-weight:800;letter-spacing:.02em;color:#fff;
+    background:var(--remax-blue);cursor:pointer;min-height:66px;
+  }
+  .btn:active{filter:brightness(.92);}
+  .btn.red{background:var(--remax-red);}
+  .btn.ghost{background:transparent;color:var(--muted);font-weight:600;font-size:18px;
+    border:2px solid var(--line);}
+  .btn[disabled]{opacity:.45;}
+  .hint{font-size:15px;color:var(--muted);margin-top:10px;line-height:1.45;}
+
+  /* ---------- Sign-in screen ---------- */
+  #signin{background:var(--bg);}
+  .property{
+    background:#fff;padding:26px 32px;border-bottom:1px solid var(--line);flex:none;
+    text-align:center;
+  }
+  .property .addr{
+    font-size:38px;font-weight:800;letter-spacing:-.02em;line-height:1.15;
+    word-break:break-word;
+  }
+  .property .meta{
+    margin-top:8px;font-size:19px;color:var(--muted);font-weight:600;
+  }
+  .form-wrap{
+    flex:1;display:flex;justify-content:center;
+    padding:30px 24px calc(env(safe-area-inset-bottom) + 30px);
+    overflow-y:auto;-webkit-overflow-scrolling:touch;
+  }
+  .form-inner{width:100%;max-width:760px;margin:auto 0;}
+  .welcome{
+    text-align:center;font-size:22px;color:var(--muted);margin:0 0 26px;font-weight:600;
+  }
+  #signin label{font-size:17px;text-transform:none;letter-spacing:0;color:var(--ink);}
+  #signin input{font-size:24px;min-height:68px;padding:18px 20px;}
+  .optional{font-weight:500;color:#9aa8b8;text-transform:none;letter-spacing:0;font-size:15px;}
+
+  .yesno{display:flex;gap:20px;}
+  .choice{
+    flex:1;border:2px solid var(--line);background:#fff;border-radius:var(--radius);
+    padding:22px;font-size:24px;font-weight:800;color:var(--ink);cursor:pointer;min-height:76px;
+  }
+  .choice[aria-pressed="true"]{
+    background:var(--remax-blue);border-color:var(--remax-blue);color:#fff;
+  }
+  .submit{
+    margin-top:34px;background:var(--remax-red);font-size:28px;padding:26px;min-height:88px;
+    border-radius:18px;box-shadow:0 6px 18px rgba(220,28,46,.28);
+  }
+  .clearlink{
+    display:block;margin:18px auto 0;background:none;border:0;color:var(--muted);
+    font-size:17px;padding:12px 20px;cursor:pointer;
+  }
+
+  /* ---------- Thank you overlay ---------- */
+  #thanks{
+    position:fixed;inset:0;background:rgba(0,61,165,.97);color:#fff;z-index:50;
+    display:none;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:40px;
+  }
+  #thanks.show{display:flex;}
+  #thanks .check{
+    width:110px;height:110px;border-radius:50%;background:#fff;color:var(--remax-blue);
+    display:flex;align-items:center;justify-content:center;font-size:64px;font-weight:800;
+    margin-bottom:28px;
+  }
+  #thanks h2{font-size:46px;margin:0 0 10px;letter-spacing:-.02em;}
+  #thanks p{font-size:22px;margin:0;opacity:.9;}
+
+  /* ---------- Admin ---------- */
+  #admin{
+    position:fixed;inset:0;background:var(--bg);z-index:60;display:none;
+    flex-direction:column;
+  }
+  #admin.show{display:flex;}
+  .admin-head{
+    background:var(--remax-blue);color:#fff;padding:calc(env(safe-area-inset-top) + 16px) 24px 16px;
+    display:flex;align-items:center;gap:16px;flex:none;
+  }
+  .admin-head h2{margin:0;font-size:23px;flex:1;}
+  .admin-head button{
+    background:rgba(255,255,255,.16);border:0;color:#fff;font-size:17px;font-weight:700;
+    padding:12px 20px;border-radius:10px;cursor:pointer;
+  }
+  .admin-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    padding:24px 24px calc(env(safe-area-inset-bottom) + 32px);}
+  .admin-inner{max-width:860px;margin:0 auto;}
+  .stat{
+    background:#fff;border-radius:16px;padding:24px;margin-bottom:20px;
+    box-shadow:0 4px 14px rgba(18,35,59,.07);
+  }
+  .stat .big{font-size:48px;font-weight:800;line-height:1;}
+  .stat .cap{color:var(--muted);font-size:17px;margin-top:6px;}
+  .actions{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:26px;}
+  .actions .btn{width:auto;flex:1 1 240px;font-size:18px;padding:18px;min-height:60px;}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden;
+    box-shadow:0 4px 14px rgba(18,35,59,.07);}
+  th,td{text-align:left;padding:14px 16px;font-size:16px;border-bottom:1px solid var(--line);}
+  th{background:#eef2f7;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);}
+  tr:last-child td{border-bottom:0;}
+  td.empty{color:#9aa8b8;font-style:italic;}
+  .sess-title{font-size:19px;font-weight:800;margin:26px 0 10px;}
+  .sess-sub{color:var(--muted);font-size:16px;margin:-6px 0 12px;}
+  .pinbox{max-width:340px;margin:60px auto;text-align:center;}
+  .pinbox h3{font-size:22px;margin:0 0 20px;}
+  .err{color:var(--remax-red);font-weight:700;font-size:16px;min-height:22px;margin-top:10px;}
+</style>
+</head>
+<body>
+
+<!-- ================= SETUP ================= -->
+<section id="setup" class="screen active">
+  <div class="brandbar">
+    <svg class="balloon" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M32 3C19 3 8 13 8 25c0 11 12 21 21 28 1 1 3 1 4 0 9-7 23-17 23-28C56 13 45 3 32 3z" fill="#fff"/>
+      <path d="M32 7c-10.5 0-19 7.8-19 18h38c0-10.2-8.5-18-19-18z" fill="#DC1C2E"/>
+      <path d="M13 25h38c0 3.2-1.6 6.3-4 9.3H17c-2.4-3-4-6.1-4-9.3z" fill="#fff"/>
+      <path d="M17 34.3h30c-3.3 4.2-8 8.2-12.6 11.7-1.4 1-3.4 1-4.8 0-4.6-3.5-9.3-7.5-12.6-11.7z" fill="#003DA5"/>
+    </svg>
+    <div class="brandtext">
+      <div class="b1">RE/MAX at Barnegat Bay</div>
+      <div class="b2">The Seegers Group</div>
+    </div>
+    <button class="logohit" id="hit1" aria-label="Menu"></button>
+  </div>
+  <div class="stripe"></div>
+
+  <div class="setup-wrap">
+    <div class="card">
+      <h1>Set up this open house</h1>
+      <p class="sub">Fill this in once before guests arrive.</p>
+
+      <div class="field">
+        <label for="s-address">Property address</label>
+        <input type="text" id="s-address" placeholder="123 Long Beach Blvd, Ship Bottom" autocomplete="off">
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="s-date">Date</label>
+          <input type="date" id="s-date">
+        </div>
+        <div class="field">
+          <label for="s-start">Start time</label>
+          <input type="time" id="s-start">
+        </div>
+        <div class="field">
+          <label for="s-end">End time</label>
+          <input type="time" id="s-end">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="s-agent">Agent hosting</label>
+        <input type="text" id="s-agent" placeholder="Brian Martin" autocomplete="off" list="agentlist">
+        <datalist id="agentlist"></datalist>
+      </div>
+
+      <div class="field">
+        <label for="s-pin">Admin PIN <span class="optional">— optional, 4 digits</span></label>
+        <input type="tel" id="s-pin" placeholder="Leave blank for none" maxlength="4" inputmode="numeric">
+        <p class="hint">Protects the sign-in list and export screen. To reach it later, tap the logo 5 times.</p>
+      </div>
+
+      <button class="btn red" id="startBtn">Start open house</button>
+      <p class="hint" id="resumeHint" style="display:none"></p>
+      <button class="btn ghost" id="resumeBtn" style="display:none;margin-top:14px;">Resume last open house</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SIGN IN ================= -->
+<section id="signin" class="screen">
+  <div class="brandbar">
+    <svg class="balloon" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M32 3C19 3 8 13 8 25c0 11 12 21 21 28 1 1 3 1 4 0 9-7 23-17 23-28C56 13 45 3 32 3z" fill="#fff"/>
+      <path d="M32 7c-10.5 0-19 7.8-19 18h38c0-10.2-8.5-18-19-18z" fill="#DC1C2E"/>
+      <path d="M13 25h38c0 3.2-1.6 6.3-4 9.3H17c-2.4-3-4-6.1-4-9.3z" fill="#fff"/>
+      <path d="M17 34.3h30c-3.3 4.2-8 8.2-12.6 11.7-1.4 1-3.4 1-4.8 0-4.6-3.5-9.3-7.5-12.6-11.7z" fill="#003DA5"/>
+    </svg>
+    <div class="brandtext">
+      <div class="b1">RE/MAX at Barnegat Bay</div>
+      <div class="b2">The Seegers Group</div>
+    </div>
+    <button class="logohit" id="hit2" aria-label="Menu"></button>
+  </div>
+  <div class="stripe"></div>
+
+  <div class="property">
+    <div class="addr" id="p-address">—</div>
+    <div class="meta" id="p-meta"></div>
+  </div>
+
+  <div class="form-wrap">
+    <div class="form-inner">
+      <p class="welcome">Welcome! Please sign in.</p>
+
+      <div class="field">
+        <label for="v-name">Name</label>
+        <input type="text" id="v-name" autocomplete="off" autocapitalize="words" enterkeyhint="next">
+      </div>
+
+      <div class="field">
+        <label for="v-phone">Phone number</label>
+        <input type="tel" id="v-phone" inputmode="tel" autocomplete="off" enterkeyhint="next">
+      </div>
+
+      <div class="field">
+        <label for="v-email">Email</label>
+        <input type="email" id="v-email" inputmode="email" autocomplete="off"
+               autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="done">
+      </div>
+
+      <div class="field">
+        <label>Are you currently working with a real estate agent?</label>
+        <div class="yesno">
+          <button type="button" class="choice" id="ans-yes" aria-pressed="false">Yes</button>
+          <button type="button" class="choice" id="ans-no" aria-pressed="false">No</button>
+        </div>
+      </div>
+
+      <button class="btn submit" id="submitBtn">Sign In</button>
+      <button class="clearlink" id="clearBtn">Clear form</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= THANK YOU ================= -->
+<div id="thanks">
+  <div class="check">&#10003;</div>
+  <h2>Thank you!</h2>
+  <p>Enjoy the open house.</p>
+</div>
+
+<!-- ================= ADMIN ================= -->
+<div id="admin">
+  <div class="admin-head">
+    <h2>Open House Admin</h2>
+    <button id="adminClose">Done</button>
+  </div>
+  <div class="admin-body">
+    <div class="admin-inner" id="adminInner"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var KEY = "seegers.openhouse.v1";
+  var db = load();
+
+  function load(){
+    try{
+      var raw = localStorage.getItem(KEY);
+      if(raw){ var d = JSON.parse(raw); if(d && Array.isArray(d.sessions)) return d; }
+    }catch(e){}
+    return { sessions:[], currentId:null, pin:"" };
+  }
+  function save(){
+    try{ localStorage.setItem(KEY, JSON.stringify(db)); }
+    catch(e){ alert("Could not save to this iPad's storage. Check that Private Browsing is off."); }
+  }
+  function current(){
+    if(!db.currentId) return null;
+    for(var i=0;i<db.sessions.length;i++){ if(db.sessions[i].id === db.currentId) return db.sessions[i]; }
+    return null;
+  }
+  function $(id){ return document.getElementById(id); }
+
+  /* ---------- formatting helpers ---------- */
+  function fmtDate(iso){
+    if(!iso) return "";
+    var p = iso.split("-");
+    if(p.length !== 3) return iso;
+    var d = new Date(+p[0], +p[1]-1, +p[2]);
+    if(isNaN(d)) return iso;
+    return d.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"});
+  }
+  function fmtTime(hhmm){
+    if(!hhmm) return "";
+    var p = hhmm.split(":");
+    if(p.length < 2) return hhmm;
+    var h = parseInt(p[0],10), m = p[1];
+    var ap = h >= 12 ? "PM" : "AM";
+    h = h % 12; if(h === 0) h = 12;
+    return h + ":" + m + " " + ap;
+  }
+  function metaLine(s){
+    var bits = [];
+    var d = fmtDate(s.date);
+    if(d) bits.push(d);
+    var t = "";
+    if(s.start && s.end) t = fmtTime(s.start) + " – " + fmtTime(s.end);
+    else if(s.start) t = fmtTime(s.start);
+    else if(s.end) t = "until " + fmtTime(s.end);
+    if(t) bits.push(t);
+    if(s.agent) bits.push("Hosted by " + s.agent);
+    return bits.join("  •  ");
+  }
+  function fmtStamp(iso){
+    var d = new Date(iso);
+    if(isNaN(d)) return iso;
+    return d.toLocaleDateString(undefined,{month:"numeric",day:"numeric",year:"numeric"}) + " " +
+           d.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+  }
+  function phoneFmt(v){
+    var d = (v||"").replace(/\D/g,"");
+    if(d.length === 11 && d.charAt(0) === "1") d = d.slice(1);
+    if(d.length > 10) return v;
+    if(d.length > 6) return "(" + d.slice(0,3) + ") " + d.slice(3,6) + "-" + d.slice(6);
+    if(d.length > 3) return "(" + d.slice(0,3) + ") " + d.slice(3);
+    if(d.length > 0) return "(" + d;
+    return "";
+  }
+
+  /* ================= SCREENS ================= */
+  function show(id){
+    var all = document.querySelectorAll(".screen");
+    for(var i=0;i<all.length;i++) all[i].classList.remove("active");
+    $(id).classList.add("active");
+    window.scrollTo(0,0);
+  }
+
+  /* ================= SETUP ================= */
+  (function initSetup(){
+    var now = new Date();
+    var pad = function(n){ return (n<10?"0":"") + n; };
+    $("s-date").value = now.getFullYear() + "-" + pad(now.getMonth()+1) + "-" + pad(now.getDate());
+
+    // Remember agents typed before, as suggestions.
+    var seen = {}, list = $("agentlist");
+    for(var i=db.sessions.length-1;i>=0;i--){
+      var a = db.sessions[i].agent;
+      if(a && !seen[a]){
+        seen[a] = 1;
+        var o = document.createElement("option"); o.value = a; list.appendChild(o);
+      }
+    }
+    if(db.sessions.length){
+      var last = db.sessions[db.sessions.length-1];
+      $("s-agent").value = last.agent || "";
+      $("resumeHint").style.display = "block";
+      $("resumeHint").textContent = "Last open house: " + last.address + " (" +
+        last.visitors.length + (last.visitors.length === 1 ? " sign-in)" : " sign-ins)");
+      $("resumeBtn").style.display = "block";
+    }
+    if(db.pin) $("s-pin").value = db.pin;
+  })();
+
+  $("s-pin").addEventListener("input", function(){
+    this.value = this.value.replace(/\D/g,"").slice(0,4);
+  });
+
+  $("startBtn").addEventListener("click", function(){
+    var addr = $("s-address").value.trim();
+    if(!addr){ $("s-address").focus(); alert("Please enter the property address."); return; }
+    var s = {
+      id: "s" + Date.now(),
+      address: addr,
+      date: $("s-date").value,
+      start: $("s-start").value,
+      end: $("s-end").value,
+      agent: $("s-agent").value.trim(),
+      createdAt: new Date().toISOString(),
+      visitors: []
+    };
+    db.pin = $("s-pin").value;
+    db.sessions.push(s);
+    db.currentId = s.id;
+    save();
+    openSignIn();
+  });
+
+  $("resumeBtn").addEventListener("click", function(){
+    if(!db.sessions.length) return;
+    db.currentId = db.sessions[db.sessions.length-1].id;
+    save();
+    openSignIn();
+  });
+
+  function openSignIn(){
+    var s = current();
+    if(!s){ show("setup"); return; }
+    $("p-address").textContent = s.address;
+    $("p-meta").textContent = metaLine(s);
+    resetForm();
+    show("signin");
+  }
+
+  /* ================= SIGN-IN FORM ================= */
+  var answer = "";
+
+  function paintAnswer(){
+    $("ans-yes").setAttribute("aria-pressed", answer === "yes" ? "true" : "false");
+    $("ans-no").setAttribute("aria-pressed", answer === "no" ? "true" : "false");
+  }
+  function setAnswer(v){
+    answer = (answer === v) ? "" : v;   // tapping again clears it — nothing is required
+    paintAnswer();
+  }
+  $("ans-yes").addEventListener("click", function(){ setAnswer("yes"); });
+  $("ans-no").addEventListener("click", function(){ setAnswer("no"); });
+
+  $("v-phone").addEventListener("input", function(){
+    var start = this.selectionStart, before = this.value.length;
+    this.value = phoneFmt(this.value);
+    if(start !== null && start < before) this.setSelectionRange(start, start);
+  });
+
+  function resetForm(){
+    $("v-name").value = "";
+    $("v-phone").value = "";
+    $("v-email").value = "";
+    answer = ""; paintAnswer();
+    if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  }
+  $("clearBtn").addEventListener("click", resetForm);
+
+  $("submitBtn").addEventListener("click", function(){
+    var s = current();
+    if(!s) return;
+    var v = {
+      name: $("v-name").value.trim(),
+      phone: $("v-phone").value.trim(),
+      email: $("v-email").value.trim(),
+      withAgent: answer,
+      at: new Date().toISOString()
+    };
+    // Everything blank means somebody just tapped the button — drop it quietly.
+    if(v.name || v.phone || v.email || v.withAgent){
+      s.visitors.push(v);
+      save();
+    }
+    resetForm();
+    var t = $("thanks");
+    t.classList.add("show");
+    setTimeout(function(){ t.classList.remove("show"); }, 2000);
+  });
+
+  /* ================= ADMIN ================= */
+  var taps = 0, tapTimer = null;
+  function tapLogo(){
+    taps++;
+    clearTimeout(tapTimer);
+    tapTimer = setTimeout(function(){ taps = 0; }, 2500);
+    if(taps >= 5){ taps = 0; requestAdmin(); }
+  }
+  $("hit1").addEventListener("click", tapLogo);
+  $("hit2").addEventListener("click", tapLogo);
+
+  function requestAdmin(){
+    $("admin").classList.add("show");
+    if(db.pin) renderPin(); else renderAdmin();
+  }
+  $("adminClose").addEventListener("click", function(){
+    $("admin").classList.remove("show");
+  });
+
+  function renderPin(){
+    var w = $("adminInner");
+    w.innerHTML =
+      '<div class="pinbox">' +
+        '<h3>Enter admin PIN</h3>' +
+        '<input type="password" id="pinIn" inputmode="numeric" maxlength="4" ' +
+               'style="text-align:center;letter-spacing:.5em;font-size:32px;">' +
+        '<div class="err" id="pinErr"></div>' +
+        '<button class="btn" id="pinGo" style="margin-top:16px;">Unlock</button>' +
+      '</div>';
+    var input = $("pinIn");
+    input.focus();
+    function tryPin(){
+      if(input.value === db.pin) renderAdmin();
+      else { $("pinErr").textContent = "Incorrect PIN"; input.value = ""; input.focus(); }
+    }
+    $("pinGo").addEventListener("click", tryPin);
+    input.addEventListener("keydown", function(e){ if(e.key === "Enter") tryPin(); });
+    input.addEventListener("input", function(){
+      this.value = this.value.replace(/\D/g,"").slice(0,4);
+      if(this.value.length === 4) tryPin();
+    });
+  }
+
+  function esc(str){
+    return String(str == null ? "" : str)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function cell(val){
+    return val ? "<td>" + esc(val) + "</td>" : '<td class="empty">—</td>';
+  }
+
+  function renderAdmin(){
+    var s = current();
+    var total = 0;
+    for(var i=0;i<db.sessions.length;i++) total += db.sessions[i].visitors.length;
+
+    var h = "";
+    if(s){
+      h += '<div class="stat">' +
+             '<div class="big">' + s.visitors.length + '</div>' +
+             '<div class="cap">sign-ins at ' + esc(s.address) + '</div>' +
+           '</div>';
+    }
+    h += '<div class="actions">' +
+           (s ? '<button class="btn red" id="expOne">Export this open house</button>' : '') +
+           '<button class="btn" id="expAll">Export all (' + total + ')</button>' +
+           '<button class="btn ghost" id="newSession">New open house</button>' +
+         '</div>';
+
+    if(s){
+      h += '<div class="sess-title">Today\'s sign-ins</div>';
+      h += '<div class="sess-sub">' + esc(metaLine(s)) + '</div>';
+      h += table(s.visitors, true);
+    }
+
+    var past = db.sessions.filter(function(x){ return !s || x.id !== s.id; });
+    if(past.length){
+      h += '<div class="sess-title" style="margin-top:34px;">Past open houses</div>';
+      for(var j=past.length-1;j>=0;j--){
+        var p = past[j];
+        h += '<div class="sess-sub" style="margin-top:18px;"><strong style="color:#12233b">' +
+             esc(p.address) + '</strong> — ' + esc(metaLine(p)) + ' — ' +
+             p.visitors.length + ' sign-in' + (p.visitors.length === 1 ? "" : "s") + '</div>';
+      }
+    }
+
+    h += '<button class="btn ghost" id="wipe" style="margin-top:36px;">Erase all stored sign-ins</button>' +
+         '<p class="hint" style="text-align:center;">Export first — this cannot be undone.</p>';
+
+    $("adminInner").innerHTML = h;
+
+    if($("expOne")) $("expOne").addEventListener("click", function(){ exportCSV([s], csvName(s)); });
+    $("expAll").addEventListener("click", function(){
+      exportCSV(db.sessions, "OpenHouse_AllSignIns.csv");
+    });
+    $("newSession").addEventListener("click", function(){
+      $("admin").classList.remove("show");
+      $("s-address").value = "";
+      show("setup");
+    });
+    $("wipe").addEventListener("click", function(){
+      if(confirm("Erase every stored sign-in from this iPad? This cannot be undone.")){
+        if(confirm("Really erase everything? Make sure you have exported the CSV first.")){
+          db = { sessions:[], currentId:null, pin:db.pin };
+          save();
+          location.reload();
+        }
+      }
+    });
+  }
+
+  function table(rows, showTime){
+    if(!rows.length) return '<table><tr><td class="empty" style="padding:24px;">No sign-ins yet.</td></tr></table>';
+    var h = "<table><tr><th>Name</th><th>Phone</th><th>Email</th><th>Has agent?</th>" +
+            (showTime ? "<th>Time</th>" : "") + "</tr>";
+    for(var i=rows.length-1;i>=0;i--){
+      var r = rows[i];
+      h += "<tr>" + cell(r.name) + cell(r.phone) + cell(r.email) +
+           cell(r.withAgent ? (r.withAgent === "yes" ? "Yes" : "No") : "") +
+           (showTime ? "<td>" + esc(fmtStamp(r.at)) + "</td>" : "") + "</tr>";
+    }
+    return h + "</table>";
+  }
+
+  /* ================= CSV EXPORT ================= */
+  function q(v){
+    v = (v == null) ? "" : String(v);
+    return '"' + v.replace(/"/g,'""') + '"';
+  }
+  function csvName(s){
+    var slug = (s.address || "OpenHouse").replace(/[^A-Za-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,50);
+    return "OpenHouse_" + slug + "_" + (s.date || "") + ".csv";
+  }
+  function buildCSV(sessions){
+    var lines = [["Property Address","Open House Date","Start Time","End Time","Hosting Agent",
+                  "Visitor Name","Phone","Email","Working With An Agent","Signed In At"]
+                 .map(q).join(",")];
+    for(var i=0;i<sessions.length;i++){
+      var s = sessions[i];
+      for(var j=0;j<s.visitors.length;j++){
+        var v = s.visitors[j];
+        lines.push([s.address, s.date, fmtTime(s.start), fmtTime(s.end), s.agent,
+                    v.name, v.phone, v.email,
+                    v.withAgent ? (v.withAgent === "yes" ? "Yes" : "No") : "",
+                    fmtStamp(v.at)].map(q).join(","));
+      }
+    }
+    return "﻿" + lines.join("\r\n");   // BOM keeps Excel happy with accents
+  }
+
+  function exportCSV(sessions, filename){
+    var count = 0;
+    for(var i=0;i<sessions.length;i++) count += sessions[i].visitors.length;
+    if(!count){ alert("There are no sign-ins to export yet."); return; }
+
+    var csv  = buildCSV(sessions);
+    var blob = new Blob([csv], {type:"text/csv"});
+
+    // iOS: the Share sheet gives AirDrop and Mail-with-attachment in one tap.
+    if(window.File && navigator.canShare){
+      try{
+        var file = new File([blob], filename, {type:"text/csv"});
+        if(navigator.canShare({files:[file]})){
+          navigator.share({files:[file], title:filename})
+            .catch(function(){ downloadCSV(blob, filename); });
+          return;
+        }
+      }catch(e){}
+    }
+    downloadCSV(blob, filename);
+  }
+
+  function downloadCSV(blob, filename){
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+  }
+
+  /* ================= BOOT ================= */
+  if(current()) openSignIn(); else show("setup");
+
+  // Keep two-finger / double-tap zoom from nudging the layout around mid-signature.
+  document.addEventListener("gesturestart", function(e){ e.preventDefault(); });
+
+  if("serviceWorker" in navigator){
+    window.addEventListener("load", function(){
+      navigator.serviceWorker.register("sw.js").catch(function(){});
+    });
+  }
+})();
+</script>
+</body>
+</html>

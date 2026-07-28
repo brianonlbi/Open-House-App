@@ -1,0 +1,14 @@
+{
+  "name": "Open House Sign In — The Seegers Group",
+  "short_name": "Open House",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#003DA5",
+  "theme_color": "#003DA5",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
