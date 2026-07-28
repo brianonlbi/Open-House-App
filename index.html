@@ -39,28 +39,29 @@
 
   /* ---------- Branding bar ---------- */
   .brandbar{
-    background:var(--remax-blue);
-    color:#fff;
-    padding:calc(env(safe-area-inset-top) + 18px) 28px 18px;
+    background:#fff;
+    color:var(--ink);
+    padding:calc(env(safe-area-inset-top) + 16px) 28px 16px;
     display:flex;
     align-items:center;
-    gap:18px;
+    gap:24px;
     flex:none;
   }
-  .balloon{width:52px;height:52px;flex:none;display:block;}
+  .brandlogo{height:92px;width:auto;flex:none;display:block;}
+  .brandrule{width:2px;align-self:stretch;background:var(--line);flex:none;margin:4px 0;}
   .brandtext{line-height:1.15;}
   .brandtext .b1{
-    font-size:15px;letter-spacing:.22em;text-transform:uppercase;
-    font-weight:700;color:rgba(255,255,255,.82);
+    font-size:14px;letter-spacing:.2em;text-transform:uppercase;
+    font-weight:700;color:var(--muted);
   }
   .brandtext .b2{
-    font-size:26px;font-weight:800;letter-spacing:-.01em;margin-top:3px;
+    font-size:27px;font-weight:800;letter-spacing:-.01em;margin-top:3px;color:var(--remax-blue);
   }
   .logohit{
-    margin-left:auto;width:64px;height:56px;border:0;background:transparent;
+    margin-left:auto;width:64px;height:64px;border:0;background:transparent;
     cursor:pointer;
   }
-  .stripe{height:6px;background:linear-gradient(90deg,var(--remax-red) 0 34%,#fff 34% 66%,var(--remax-blue) 66% 100%);flex:none;}
+  .stripe{height:6px;background:linear-gradient(90deg,var(--remax-red) 0 50%,var(--remax-blue) 50% 100%);flex:none;}
 
   /* ---------- Setup screen ---------- */
   .setup-wrap{
@@ -203,14 +204,10 @@
 <!-- ================= SETUP ================= -->
 <section id="setup" class="screen active">
   <div class="brandbar">
-    <svg class="balloon" viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M32 3C19 3 8 13 8 25c0 11 12 21 21 28 1 1 3 1 4 0 9-7 23-17 23-28C56 13 45 3 32 3z" fill="#fff"/>
-      <path d="M32 7c-10.5 0-19 7.8-19 18h38c0-10.2-8.5-18-19-18z" fill="#DC1C2E"/>
-      <path d="M13 25h38c0 3.2-1.6 6.3-4 9.3H17c-2.4-3-4-6.1-4-9.3z" fill="#fff"/>
-      <path d="M17 34.3h30c-3.3 4.2-8 8.2-12.6 11.7-1.4 1-3.4 1-4.8 0-4.6-3.5-9.3-7.5-12.6-11.7z" fill="#003DA5"/>
-    </svg>
+    <img class="brandlogo" src="logo.png" alt="RE/MAX at Barnegat Bay">
+    <div class="brandrule"></div>
     <div class="brandtext">
-      <div class="b1">RE/MAX at Barnegat Bay</div>
+      <div class="b1">Open House</div>
       <div class="b2">The Seegers Group</div>
     </div>
     <button class="logohit" id="hit1" aria-label="Menu"></button>
@@ -264,14 +261,10 @@
 <!-- ================= SIGN IN ================= -->
 <section id="signin" class="screen">
   <div class="brandbar">
-    <svg class="balloon" viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M32 3C19 3 8 13 8 25c0 11 12 21 21 28 1 1 3 1 4 0 9-7 23-17 23-28C56 13 45 3 32 3z" fill="#fff"/>
-      <path d="M32 7c-10.5 0-19 7.8-19 18h38c0-10.2-8.5-18-19-18z" fill="#DC1C2E"/>
-      <path d="M13 25h38c0 3.2-1.6 6.3-4 9.3H17c-2.4-3-4-6.1-4-9.3z" fill="#fff"/>
-      <path d="M17 34.3h30c-3.3 4.2-8 8.2-12.6 11.7-1.4 1-3.4 1-4.8 0-4.6-3.5-9.3-7.5-12.6-11.7z" fill="#003DA5"/>
-    </svg>
+    <img class="brandlogo" src="logo.png" alt="RE/MAX at Barnegat Bay">
+    <div class="brandrule"></div>
     <div class="brandtext">
-      <div class="b1">RE/MAX at Barnegat Bay</div>
+      <div class="b1">Open House</div>
       <div class="b2">The Seegers Group</div>
     </div>
     <button class="logohit" id="hit2" aria-label="Menu"></button>
