@@ -15,10 +15,14 @@ your work computer. No accounts, no server, no internet required at the property
 
 ## Putting it on the iPad
 
-1. In this repo on GitHub: **Settings → Pages → Source: Deploy from a branch**,
-   pick this branch and the root folder, and save. After a minute GitHub gives you
-   a URL like `https://brianonlbi.github.io/open-house-app/`.
-2. On the iPad, open that URL in **Safari**.
+The app is served by GitHub Pages from this repo's default branch, at:
+
+**https://brianonlbi.github.io/Open-House-App/**
+
+1. If Pages is ever turned off: **Settings → Pages → Source: Deploy from a branch**,
+   pick the default branch and the `/ (root)` folder, and save. The repo must be
+   public for this to work on a free GitHub plan.
+2. On the iPad, open the URL above in **Safari**.
 3. Tap the **Share** button → **Add to Home Screen** → Add.
 4. Launch it from the Home Screen icon. It opens full-screen with no address bar.
 
