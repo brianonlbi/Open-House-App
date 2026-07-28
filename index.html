@@ -6,7 +6,7 @@
 <title>Open House Sign In</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Open House">
 <meta name="theme-color" content="#003DA5">
 <link rel="manifest" href="manifest.webmanifest">
@@ -47,7 +47,9 @@
     gap:24px;
     flex:none;
   }
-  .brandlogo{height:92px;width:auto;flex:none;display:block;}
+  .brandlogo{height:92px;width:auto;flex:none;display:block;cursor:pointer;
+    transition:opacity .12s ease;}
+  .brandlogo.tapped{opacity:.45;}
   .brandrule{width:2px;align-self:stretch;background:var(--line);flex:none;margin:4px 0;}
   .brandtext{line-height:1.15;}
   .brandtext .b1{
@@ -525,14 +527,21 @@
 
   /* ================= ADMIN ================= */
   var taps = 0, tapTimer = null;
-  function tapLogo(){
+  function tapLogo(e){
+    // Blink the logo so you can tell the tap registered — a silent gesture
+    // just looks broken when you're standing there counting.
+    var el = e.currentTarget;
+    if(el && el.classList){
+      el.classList.add("tapped");
+      setTimeout(function(){ el.classList.remove("tapped"); }, 130);
+    }
     taps++;
     clearTimeout(tapTimer);
-    tapTimer = setTimeout(function(){ taps = 0; }, 2500);
+    tapTimer = setTimeout(function(){ taps = 0; }, 4000);
     if(taps >= 5){ taps = 0; requestAdmin(); }
   }
-  $("hit1").addEventListener("click", tapLogo);
-  $("hit2").addEventListener("click", tapLogo);
+  var targets = document.querySelectorAll(".brandlogo, .logohit");
+  for(var t=0;t<targets.length;t++) targets[t].addEventListener("click", tapLogo);
 
   function requestAdmin(){
     $("admin").classList.add("show");

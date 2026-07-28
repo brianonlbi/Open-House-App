@@ -3,7 +3,7 @@
   "short_name": "Open House",
   "start_url": "./index.html",
   "scope": "./",
-  "display": "fullscreen",
+  "display": "standalone",
   "orientation": "any",
   "background_color": "#003DA5",
   "theme_color": "#003DA5",

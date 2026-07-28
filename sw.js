@@ -1,5 +1,5 @@
 /* Caches the app on the iPad so it opens with no internet at the property. */
-var CACHE = "seegers-openhouse-v1";
+var CACHE = "seegers-openhouse-v2";
 var ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon.png"];
 
 self.addEventListener("install", function(e){
