@@ -7,8 +7,8 @@ description: >
   "schedule something for Instagram," "which property should we highlight," or "run the
   listing pipeline." The skill picks the two best properties automatically (most open summer
   weeks, no repeats within 10 days) and schedules two posts per day to Instagram and Facebook
-  via Blotato: a single cover-photo post at 9 AM ET and a five-photo gallery post at 3 PM ET,
-  each featuring a different property. No browser login required — data is pulled directly
+  via Blotato: a single cover-photo post at 9 AM ET and a five-photo gallery post at 3 PM ET
+  (cover, family room, bedroom, pool, exterior), each featuring a different property. No browser login required — data is pulled directly
   from the live brianonlbi.com API. Always invoke this skill for any social media post about
   LBI rental properties — do not attempt the pipeline manually without it.
 ---
@@ -166,12 +166,76 @@ For **each** of A and B, extract from the rental object:
 
 ### Media
 
-- **Pick A (9 AM):** `photos[0]` only — the cover photo. One image, nothing else.
-- **Pick B (3 PM):** `photos[0]` through `photos[4]` — five images in order.
-  If the property has fewer than 5 photos, use every photo it has and note the count in the report.
-
 Photo URLs from the API are publicly accessible and can be handed to Blotato directly as
 `mediaUrls` — no upload/presign step is needed.
+
+- **Pick A (9 AM):** `photos[0]` only — the cover photo. One image, nothing else.
+- **Pick B (3 PM):** exactly five images, chosen by the rules in Step 4b. Not the first five.
+
+---
+
+## Step 4b: Choose Pick B's Five Photos
+
+The API returns a flat `photos` array with no captions or tags — filenames are just
+`.../RentalPhotos/1190/1190708.4.jpg`. Room type **cannot** be inferred from position or
+filename, so the photos have to be looked at.
+
+### The five slots, in carousel order
+
+| # | Slot | What to look for |
+|---|---|---|
+| 1 | **Cover photo** | Always `photos[0]`, whatever it shows. Never substituted. |
+| 2 | **Family room** | Main living space — sofas, TV, open living area. A great room counts. |
+| 3 | **Bedroom** | Any bedroom; prefer the largest / primary if more than one is obvious. |
+| 4 | **Pool** | Only if the property actually has one — see the gate below. |
+| 5 | **Exterior** | Backyard, deck, patio, porch, outdoor seating, or a yard fire pit. |
+
+### Identifying them
+
+1. Take the candidate list: `photos[1]` onward, capped at the first **24** to bound the work.
+2. Download them to the scratchpad:
+   ```bash
+   mkdir -p /tmp/lbi-photos && cd /tmp/lbi-photos
+   # for each candidate index i: curl -sL -o "p${i}.jpg" "<photo url>"
+   ```
+3. **Read the downloaded images** with the Read tool — it renders them visually. Batch them a
+   handful at a time rather than one call per photo.
+4. Label each as: `family_room`, `bedroom`, `pool`, `exterior`, `kitchen`, `bath`, `other`.
+5. Fill slots 2, 3, 4, 5 with the best match for each. A photo may be used **once** — never
+   repeat an image inside the carousel, and never reuse `photos[0]`.
+
+Prefer bright, wide, uncluttered shots when several photos match the same slot.
+
+### The pool gate
+
+Only fill slot 4 with a pool photo when **both** are true:
+
+- `badges` or `amenityList` contains a pool entry (`Pool`, `Heated Pool`, `Private Pool`), **and**
+- a candidate photo actually shows the pool
+
+Amenity list alone is not enough — a listing can claim a pool with no photo of it. A hot tub is
+**not** a pool; a hot-tub shot belongs in the exterior slot.
+
+### Fallbacks
+
+Brian's rule: *"If there is no pool or exterior photo then just pick 2 random photos."*
+Generalized so it also covers a missing family room or bedroom:
+
+- Any slot with no confident match is left empty, then backfilled from the unused candidates —
+  in array order, skipping anything already chosen. Array order rather than true randomness so a
+  run is reproducible and the carousel stays coherent.
+- Backfill preference when choosing among unused photos: `kitchen` → `other` interior → anything
+  remaining.
+- **The post always carries exactly 5 images.** Brian's properties always have at least 5 photos,
+  so a short array means something is wrong upstream — if `photos` has fewer than 5 entries, use
+  every photo available and flag it loudly in the Step 8 report rather than posting a short
+  carousel silently.
+
+### Report what was chosen
+
+Step 8 must list the slot each photo filled and whether it was a real match or a backfill, e.g.
+`cover / family room / bedroom / pool / backfill (kitchen — no exterior shot found)`. That is how
+Brian catches a mislabeled carousel without opening Blotato.
 
 ---
 
@@ -255,8 +319,8 @@ EST is in effect.
 
 1. Instagram — Pick A, `mediaUrls: [photos[0]]`, morning time
 2. Facebook — Pick A, `mediaUrls: [photos[0]]`, morning time
-3. Instagram — Pick B, `mediaUrls: photos[0..4]`, afternoon time
-4. Facebook — Pick B, `mediaUrls: photos[0..4]`, afternoon time
+3. Instagram — Pick B, `mediaUrls` = the five Step 4b photos in slot order, afternoon time
+4. Facebook — Pick B, same five photos in the same order, afternoon time
 
 After creating them, call `blotato_list_posts` filtered to the target day and confirm all four
 came back `scheduled`. If any is missing or `failed`, report it — do not silently retry more
@@ -295,6 +359,8 @@ did not persist, so the next run may repeat a property.
 Summarize in 8 lines or fewer:
 - **9 AM — [address, town]**: X BR / X BA, N open weeks, why it won
 - **3 PM — [address, town]**: X BR / X BA, N open weeks, why it won
+- The 3 PM carousel lineup, slot by slot, marking any backfills:
+  `cover / family room / bedroom / pool / backfill (kitchen — no exterior shot)`
 - Confirmation that all 4 posts (IG + FB × 2 slots) came back `scheduled`, with the target date
 - Anything degraded: post log unreadable/unpushed, fewer than 5 photos available, a slot skipped
 
