@@ -1,0 +1,32 @@
+[
+  {
+    "property_id": "167087",
+    "address": "1718 North Central Ave, Surf City",
+    "slot": "morning",
+    "posted_at": "2026-07-28T12:01:54Z"
+  },
+  {
+    "property_id": "162630",
+    "address": "2600 Long Beach Blvd., Long Beach Township",
+    "slot": "morning",
+    "posted_at": "2026-07-30T12:01:38Z"
+  },
+  {
+    "property_id": "56172",
+    "address": "6414 Ocean Boulevard, Brant Beach",
+    "slot": "morning",
+    "posted_at": "2026-08-01T12:01:03Z"
+  },
+  {
+    "property_id": null,
+    "address": "46 W Mears Ave, Long Beach Township",
+    "slot": "morning",
+    "posted_at": "2026-08-05T13:00:00Z"
+  },
+  {
+    "property_id": null,
+    "address": "4302 S Long Beach Blvd, Long Beach Township",
+    "slot": "afternoon",
+    "posted_at": "2026-08-05T19:00:00Z"
+  }
+]
