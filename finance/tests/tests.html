@@ -141,17 +141,143 @@ async function run(API) {
     API.state.data = saved;
   }
 
-  /* Build step 2 adds, for each institution:
-   *
-   *   describe("parser: <institution>");
-   *   const csv = await sample("<institution>-sample.csv");
-   *   const rows = API.parsers["<institution>"](csv, "<institution>-sample.csv");
-   *   eq("reads every row", rows.length, N);
-   *   eq("keeps the raw description verbatim", rows[0].description, "...");
-   *   eq("money out is negative", rows[0].amount, -12.34);
-   *   eq("dates are ISO", rows[0].date, "2026-01-05");
-   *   ... plus dedup: the same file parsed twice yields identical ids.
-   */
+  describe("parseCSV");
+  {
+    deepEq("splits a plain row", API.parseCSV("a,b,c"), [["a", "b", "c"]]);
+    deepEq("keeps a comma inside quotes", API.parseCSV('a,"b,c",d'), [["a", "b,c", "d"]]);
+    deepEq("unescapes a doubled quote", API.parseCSV('a,"say ""hi""",c'), [["a", 'say "hi"', "c"]]);
+    deepEq("handles a newline inside quotes", API.parseCSV('a,"one\ntwo",c'), [["a", "one\ntwo", "c"]]);
+    deepEq("handles CRLF line endings", API.parseCSV("a,b\r\nc,d"), [["a", "b"], ["c", "d"]]);
+    deepEq("strips a leading BOM", API.parseCSV("﻿a,b"), [["a", "b"]]);
+    deepEq("drops blank lines", API.parseCSV("a,b\n\n\nc,d"), [["a", "b"], ["c", "d"]]);
+    deepEq("keeps empty trailing fields", API.parseCSV("a,b,"), [["a", "b", ""]]);
+  }
+
+  describe("toISODate");
+  {
+    eq("MM/DD/YYYY", API.toISODate("09/14/2026"), "2026-09-14");
+    eq("pads a single-digit month and day", API.toISODate("1/5/2026"), "2026-01-05");
+    eq("two-digit year in this century", API.toISODate("1/5/26"), "2026-01-05");
+    eq("rejects a non-date", API.toISODate("not a date"), "");
+    eq("rejects an empty string", API.toISODate(""), "");
+  }
+
+  describe("hashId / assignIds");
+  {
+    ok("the same key always hashes the same", API.hashId("x") === API.hashId("x"));
+    ok("different keys hash differently", API.hashId("x") !== API.hashId("y"));
+
+    // The case real data exposed: two genuinely separate charges, identical in
+    // every field. Naive dedup would silently swallow the second one.
+    const twins = () => ([
+      { account: "a", date: "2026-08-07", amount: -26, description: "SAME MERCHANT" },
+      { account: "a", date: "2026-08-07", amount: -26, description: "SAME MERCHANT" },
+      { account: "a", date: "2026-08-08", amount: -26, description: "SAME MERCHANT" },
+    ]);
+    const run1 = API.assignIds(twins());
+    ok("identical rows still get distinct ids", run1[0].id !== run1[1].id);
+    ok("a different date gives a different id", run1[1].id !== run1[2].id);
+
+    const run2 = API.assignIds(twins());
+    deepEq("re-importing the same rows reproduces the same ids",
+           run2.map((t) => t.id), run1.map((t) => t.id));
+
+    const other = API.assignIds([
+      { account: "b", date: "2026-08-07", amount: -26, description: "SAME MERCHANT" },
+    ]);
+    ok("the same row on another account is a different transaction", other[0].id !== run1[0].id);
+  }
+
+  describe("detectParser / inferAccount");
+  {
+    const csv = await sample("chase_card-sample.csv");
+    eq("recognises a Chase card export", API.detectParser(csv).id, "chase_card");
+    eq("does not claim an unknown file", API.detectParser("Foo,Bar\n1,2").id, null);
+
+    const acct = API.inferAccount("Chase1234_Activity_20260916.csv", API.PARSERS.chase_card);
+    eq("reads the institution off the filename", acct.institution, "Chase");
+    eq("builds a stable account id", acct.id, "chase-1234");
+    eq("labels it with the last four", acct.label, "Chase …1234");
+    eq("knows it is a credit card", acct.kind, "credit_card");
+  }
+
+  describe("parser: chase_card");
+  {
+    const csv = await sample("chase_card-sample.csv");
+    const out = API.PARSERS.chase_card.parse(csv, "chase_card-sample.csv", "chase-0000");
+    const rows = out.transactions;
+    API.assignIds(rows);
+
+    eq("reads every data row", rows.length, 13);
+    deepEq("no unreadable rows", out.problems, []);
+    eq("did not need to flip signs", out.flipped, false);
+
+    eq("dates are ISO", rows[0].date, "2026-09-14");
+    eq("keeps the post date too", rows[0].post_date, "2026-09-15");
+    eq("money out is negative", rows[0].amount, -59);
+    eq("tags the source file", rows[0].source_file, "chase_card-sample.csv");
+    eq("assigns the account", rows[0].account, "chase-0000");
+    eq("leaves category empty for the rules pass", rows[0].category, "");
+
+    // The invariant: the raw description is never touched.
+    eq("keeps a comma inside a quoted description", rows[1].description, "SAMPLE GROCER, LLC");
+    eq("keeps double spaces verbatim", rows[5].description, "SAMPLE STREAM  *800-000-0000");
+    eq("keeps an HTML entity verbatim", rows[8].description, "SAMPLE B&amp;H SUPPLY 800-000-0000");
+    eq("keeps an apostrophe verbatim", rows[11].description, "SAMPLE DINER'S CLUB F1234");
+
+    // The thing that makes homemade finance apps produce wrong numbers.
+    const payment = rows.find((t) => t.issuer_type === "Payment");
+    eq("a card payment becomes a transfer", payment.type, "transfer");
+    ok("the card payment is positive", payment.amount > 0);
+
+    const refund = rows.find((t) => t.issuer_type === "Return");
+    eq("a refund stays an expense, not income", refund.type, "expense");
+    ok("the refund is positive so it nets against its category", refund.amount > 0);
+
+    const fee = rows.find((t) => t.description === "LATE FEE");
+    eq("a fee is a real expense", fee.type, "expense");
+    ok("the fee is negative", fee.amount < 0);
+
+    // The issuer's own category is kept for reference but is never authoritative.
+    const fuel = rows.filter((t) => t.description.startsWith("SAMPLE FUEL STOP"));
+    eq("two charges at the same fuel merchant", fuel.length, 2);
+    ok("the issuer categorised them inconsistently",
+       fuel[0].issuer_category !== fuel[1].issuer_category,
+       fuel[0].issuer_category + " vs " + fuel[1].issuer_category);
+    ok("so neither is used as our category", fuel.every((t) => t.category === ""));
+
+    // Identical rows inside one file.
+    const tolls = rows.filter((t) => t.description === "SAMPLE TOLLS INC.");
+    eq("both identical toll charges survive", tolls.length, 2);
+    ok("with distinct ids", tolls[0].id !== tolls[1].id);
+
+    // Re-parsing is stable, which is what makes re-imports dedup.
+    const again = API.PARSERS.chase_card.parse(csv, "chase_card-sample.csv", "chase-0000");
+    API.assignIds(again.transactions);
+    deepEq("parsing the same file twice yields identical ids",
+           again.transactions.map((t) => t.id), rows.map((t) => t.id));
+
+    // The totals a naive import would get wrong.
+    const naive = rows.reduce((sum, t) => sum + t.amount, 0);
+    const real = rows.filter((t) => t.type !== "transfer").reduce((sum, t) => sum + t.amount, 0);
+    ok("excluding the transfer changes the total", Math.abs(naive - real) > 1,
+       "naive " + naive.toFixed(2) + " vs " + real.toFixed(2));
+    eq("spending total excludes the card payment", Number(real.toFixed(2)), -1021.37);
+  }
+
+  describe("parser: chase_card — inverted-sign export");
+  {
+    // Some issuers report purchases as positive. The parser must notice and flip
+    // rather than importing every expense backwards.
+    const csv = (await sample("chase_card-sample.csv"))
+      .split("\n")
+      .map((line, i) => (i === 0 || !line.trim() ? line : line.replace(/,-(\d)/, ",$1")))
+      .join("\n");
+    const out = API.PARSERS.chase_card.parse(csv, "flipped.csv", "chase-0000");
+    eq("notices the export is inverted", out.flipped, true);
+    const sale = out.transactions.find((t) => t.issuer_type === "Sale");
+    ok("purchases end up negative anyway", sale.amount < 0, String(sale.amount));
+  }
 
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");

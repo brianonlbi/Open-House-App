@@ -245,6 +245,42 @@ dl.facts dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wra
   background: var(--bg-sunk); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 8px; max-height: 220px; overflow: auto;
 }
+/* ------------------------------------------------------------------ table */
+table.tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
+table.tbl th {
+  text-align: left; font-weight: 600; color: var(--text-dim); white-space: nowrap;
+  border-bottom: 1px solid var(--border-strong); padding: 5px 8px;
+  position: sticky; top: 0; background: var(--bg-raised); z-index: 1;
+}
+table.tbl td { padding: 3px 8px; border-bottom: 1px solid var(--border); }
+table.tbl td.num { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.tbl td.desc { font-family: var(--mono); font-size: 11px; }
+table.tbl td.date { font-family: var(--mono); white-space: nowrap; }
+table.tbl tbody tr:hover td { background: var(--bg-hover); }
+.neg { color: var(--neg); }
+.pos { color: var(--pos); }
+.scroll { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+
+.tag {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+  background: var(--bg-sunk); border: 1px solid var(--border); color: var(--text-dim);
+}
+.tag.transfer { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+.tag.refund   { color: var(--pos); border-color: var(--pos); }
+
+.note {
+  padding: 8px 10px; border-radius: var(--radius); font-size: 12px;
+  background: var(--accent-bg); border: 1px solid var(--accent); margin-bottom: 10px;
+}
+.note.warn { background: var(--warn-bg); border-color: var(--warn); }
+.note strong { display: block; margin-bottom: 2px; }
+
+input.text {
+  font: inherit; padding: 3px 7px; border-radius: var(--radius);
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
+}
+
 .muted { color: var(--text-dim); }
 .small { font-size: 12px; }
 kbd {
@@ -322,7 +358,7 @@ kbd {
   <span id="st-saved">never saved</span>
 </footer>
 
-<div id="drop-overlay">Drop finances-data.json to load it</div>
+<div id="drop-overlay">Drop a .csv statement to import it</div>
 <div id="toast"></div>
 
 <script>
@@ -354,6 +390,8 @@ const state = {
   dirty: false,        // in-memory changes not yet written to disk
   lastSaved: null,     // ISO timestamp of the last successful write
   view: "data",
+  pendingImport: null, // a parsed file staged for review, not yet committed
+  lastImport: null,    // { read, imported, duplicates, problems } of the last commit
 };
 
 /* ======================================================================== *
@@ -659,6 +697,298 @@ function migrate(data) {
 }
 
 /* ======================================================================== *
+ * 5b. Importing statements
+ *
+ * A parser turns one institution's export into normalized transactions. It is
+ * pure — text in, rows out, no DOM, no state, no network — which is what makes
+ * it testable from tests/tests.html.
+ * ======================================================================== */
+
+/** RFC 4180-ish CSV reader: quoted fields, escaped quotes, commas and newlines
+ *  inside fields, CRLF, and a leading BOM. */
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  text = text.replace(/^\uFEFF/, "");
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }   // "" is a literal quote
+        else inQuotes = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      row.push(field); field = "";
+    } else if (ch === "\n") {
+      row.push(field); rows.push(row); row = []; field = "";
+    } else if (ch !== "\r") {
+      field += ch;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+
+  return rows.filter((r) => r.some((f) => f.trim() !== ""));   // drop blank lines
+}
+
+/**
+ * cyrb53 — a fast, well-distributed string hash. Run twice with different seeds
+ * and concatenated, giving ~106 bits. A 32-bit hash would collide at these row
+ * counts often enough to silently lose a transaction; this will not.
+ * Synchronous on purpose, so parsers stay pure (crypto.subtle is async).
+ */
+function cyrb53(str, seed) {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+const hashId = (key) => cyrb53(key, 0).toString(36) + "-" + cyrb53(key, 1).toString(36);
+
+/** MM/DD/YYYY (or M/D/YY) to ISO YYYY-MM-DD. Returns "" if it isn't a date. */
+function toISODate(value) {
+  const m = String(value || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return "";
+  let [, mm, dd, yyyy] = m;
+  if (yyyy.length === 2) yyyy = String(Number(yyyy) + (Number(yyyy) > 68 ? 1900 : 2000));
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+
+const UNIT = "\u241F";   // field separator for hash keys — cannot occur in a statement
+
+/**
+ * Assign dedup ids.
+ *
+ * The id is a hash of account + date + amount + description, plus an
+ * occurrence index. The index matters: a statement legitimately contains two
+ * identical rows (two $26.00 charges at the same merchant on the same day),
+ * and without it the second one would be silently swallowed as a duplicate.
+ * Because the index counts occurrences in file order, re-importing the same
+ * file still produces the same ids, so re-imports still dedup correctly.
+ */
+function assignIds(rows) {
+  const seen = new Map();
+  for (const tx of rows) {
+    const base = [tx.account, tx.date, tx.amount.toFixed(2), tx.description].join(UNIT);
+    const n = seen.get(base) || 0;
+    seen.set(base, n + 1);
+    tx.id = hashId(base + UNIT + n);
+  }
+  return rows;
+}
+
+/* --------------------------------------------------------------- parsers */
+
+const PARSERS = {
+  /**
+   * Chase credit card activity export.
+   * Header: Transaction Date,Post Date,Description,Category,Type,Amount,Memo
+   *
+   * Chase already signs money out as negative, matching our convention, so no
+   * flip is needed — but the parser verifies that rather than assuming it.
+   */
+  chase_card: {
+    label: "Chase credit card",
+    institution: "Chase",
+    kind: "credit_card",
+    columns: ["Transaction Date", "Post Date", "Description", "Category", "Type", "Amount", "Memo"],
+    required: ["Transaction Date", "Post Date", "Description", "Type", "Amount"],
+
+    /** Chase's Type column says what a row *is*, which is better than guessing.
+     *  A card Payment is money arriving from another account of ours: internal
+     *  movement, never spending. Returns stay expenses so a refund nets against
+     *  its category instead of appearing as income. */
+    typeFor(issuerType) {
+      return issuerType === "Payment" ? "transfer" : "expense";
+    },
+
+    matches(header) {
+      const set = new Set(header.map((h) => h.trim()));
+      return this.required.every((c) => set.has(c));
+    },
+
+    parse(text, filename, accountId) {
+      const rows = parseCSV(text);
+      if (!rows.length) throw new Error("That file is empty.");
+
+      const header = rows[0].map((h) => h.trim());
+      if (!this.matches(header)) {
+        throw new Error("Missing column(s): " +
+          this.required.filter((c) => !header.includes(c)).join(", "));
+      }
+      const at = {};
+      this.columns.forEach((c) => { at[c] = header.indexOf(c); });
+
+      const transactions = [], problems = [];
+
+      rows.slice(1).forEach((row, i) => {
+        const cell = (name) => (at[name] === -1 ? "" : (row[at[name]] ?? ""));
+
+        const date = toISODate(cell("Transaction Date"));
+        const amount = Number(String(cell("Amount")).replace(/[$,\s]/g, ""));
+
+        if (!date || !Number.isFinite(amount)) {
+          problems.push({ line: i + 2, text: row.join(","),
+                          why: !date ? "unreadable date" : "unreadable amount" });
+          return;
+        }
+        const issuerType = cell("Type").trim();
+
+        transactions.push({
+          id: "",
+          date,
+          post_date: toISODate(cell("Post Date")) || date,
+          amount,
+          description: cell("Description"),   // verbatim. never trimmed, cased or cleaned.
+          account: accountId,
+          category: "",                       // assigned by rules, build step 4
+          type: this.typeFor(issuerType),
+          source_file: filename,
+          notes: cell("Memo").trim(),
+          issuer_category: cell("Category").trim(),  // Chase's own guess. kept, not trusted.
+          issuer_type: issuerType,
+        });
+      });
+
+      // Verify the sign convention instead of assuming it. If this export reports
+      // purchases as positive, flip the whole file rather than importing inverted.
+      let flipped = false;
+      const sales = transactions.filter((t) => t.issuer_type === "Sale");
+      if (sales.length >= 5 && sales.filter((t) => t.amount > 0).length / sales.length > 0.8) {
+        transactions.forEach((t) => { t.amount = -t.amount; });
+        flipped = true;
+      }
+
+      return { transactions, problems, flipped };
+    },
+  },
+};
+
+/** Pick the parser that recognises this file's header row. */
+function detectParser(text) {
+  const rows = parseCSV(text.slice(0, 4096));
+  if (!rows.length) return null;
+  const header = rows[0].map((h) => h.trim());
+  for (const [id, parser] of Object.entries(PARSERS)) {
+    if (parser.matches(header)) return { id, parser, header };
+  }
+  return { id: null, parser: null, header };
+}
+
+/**
+ * Work out which account a file belongs to from its name.
+ * Chase names exports like `Chase1234_Activity_20260916.csv`.
+ */
+function inferAccount(filename, parser) {
+  const m = filename.match(/^([A-Za-z][A-Za-z ]*?)[\s_-]*(\d{4})[\s_-]*Activity/i);
+  const institution = m ? m[1] : (parser ? parser.institution : "Account");
+  const last4 = m ? m[2] : null;
+  return {
+    id: (institution + (last4 ? "-" + last4 : "")).toLowerCase().replace(/[^a-z0-9-]+/g, "-"),
+    label: institution + (last4 ? " \u2026" + last4 : ""),
+    institution,
+    kind: parser ? parser.kind : "unknown",
+  };
+}
+
+/** Read a statement file and stage it for review. Nothing is committed here. */
+async function beginImport(file) {
+  const text = await file.text();
+  const found = detectParser(text);
+
+  if (!found || !found.parser) {
+    throw new Error(
+      `I don't recognise the columns in ${file.name}` +
+      (found && found.header ? ` (${found.header.slice(0, 6).join(", ")})` : "") +
+      ". Column mapping for unknown exports is build step 2b.");
+  }
+
+  const account = inferAccount(file.name, found.parser);
+  const result = found.parser.parse(text, file.name, account.id);
+  assignIds(result.transactions);
+
+  if (!result.transactions.length) throw new Error(`No readable rows in ${file.name}.`);
+
+  const existing = new Set((state.data ? state.data.transactions : []).map((t) => t.id));
+  const fresh = result.transactions.filter((t) => !existing.has(t.id));
+
+  state.pendingImport = {
+    filename: file.name,
+    parserId: found.id,
+    parserLabel: found.parser.label,
+    account,
+    rows: result.transactions,
+    fresh,
+    duplicates: result.transactions.length - fresh.length,
+    problems: result.problems,
+    flipped: result.flipped,
+  };
+  switchView("data");
+  render();
+}
+
+/** Commit the staged import into the data file. */
+async function commitImport() {
+  const pending = state.pendingImport;
+  if (!pending) return;
+
+  if (!state.data) state.data = newDataFile();
+
+  // Register the account the first time we see it.
+  const label = ($("#import-account-label") || {}).value || pending.account.label;
+  if (!state.data.accounts.some((a) => a.id === pending.account.id)) {
+    state.data.accounts.push({ ...pending.account, label: label.trim() || pending.account.label });
+  }
+
+  state.data.transactions.push(...pending.fresh);
+  state.data.transactions.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+  state.lastImport = {
+    filename: pending.filename,
+    account: pending.account.id,
+    read: pending.rows.length + pending.problems.length,
+    imported: pending.fresh.length,
+    duplicates: pending.duplicates,
+    problems: pending.problems.length,
+    at: new Date().toISOString(),
+  };
+  state.pendingImport = null;
+  state.dirty = true;
+
+  // There is data now, so "nothing connected yet" is no longer true. Without
+  // this the Data view would keep showing the connect-a-folder empty state and
+  // hide the import that just succeeded.
+  if (state.mode === "none") state.mode = "manual";
+
+  await saveNow();
+  toast(`${plural(state.lastImport.imported, "transaction")} imported, ` +
+        `${state.lastImport.duplicates} skipped as duplicates.`);
+}
+
+function cancelImport() {
+  state.pendingImport = null;
+  render();
+}
+
+/** Summarise a set of rows by transaction type, for the import preview. */
+function typeBreakdown(rows) {
+  const counts = new Map();
+  for (const tx of rows) {
+    const key = tx.issuer_type || tx.type;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]);
+}
+
+/* ======================================================================== *
  * 6. Derived views of the data
  *
  * Written generically so they keep working as transactions arrive in later
@@ -702,7 +1032,7 @@ function renderTopBar() {
     none:   ["",      "No data file"],
     folder: ["ok",    DATA_FILE],
     cache:  ["warn",  "Cached in browser"],
-    manual: ["warn",  "Loaded by hand"],
+    manual: ["warn",  "No folder linked"],
   };
   const [cls, label] = states[state.mode] || states.none;
   dot.className = "dot " + cls;
@@ -711,7 +1041,7 @@ function renderTopBar() {
     none:   "No data file yet. Connect the project folder on the Data file tab.",
     folder: `Reading and writing ${DATA_FILE} in your project folder.`,
     cache:  "Your data is safe in this browser, but not written to disk. Reconnect the folder.",
-    manual: "Loaded from a file you picked. Use Export to write changes back to disk.",
+    manual: "Held in this browser only. Connect the project folder, or use Export to write it to disk.",
   }[state.mode];
 
   $("#btn-save").disabled = !state.data || state.mode === "none";
@@ -723,7 +1053,7 @@ function renderStatusBar() {
   const s = summary();
   $("#st-file").textContent =
     state.mode === "folder" ? DATA_FILE
-    : state.mode === "manual" ? "unsaved copy"
+    : state.mode === "manual" ? "browser only"
     : state.mode === "cache" ? "browser cache"
     : "no data file";
   $("#st-tx").textContent       = plural(s.count, "transaction");
@@ -741,6 +1071,10 @@ function emptyState(title, body, showConnect) {
     actions.append(el("button", {
       class: "btn primary", onclick: () => run(connectFolder),
     }, "Connect project folder"));
+  }
+  if (state.mode !== "none") {
+    actions.append(el("button", { class: "btn primary", onclick: pickStatementFile },
+      "Import a statement\u2026"));
   }
   actions.append(el("button", {
     class: "btn", onclick: () => switchView("data"),
@@ -766,7 +1100,7 @@ function buildSteps() {
     "Preset questions",
     "Optional natural-language layer",
   ];
-  const doneThrough = 1;  // update as each slice lands
+  const doneThrough = 2;  // update as each slice lands
   return el("ul", { class: "steps" }, steps.map((label, i) => el("li", {
     class: i < doneThrough ? "done" : i === doneThrough ? "next" : "",
     text: `${i + 1}. ${label}`,
@@ -817,13 +1151,139 @@ function renderQuestions() {
   ));
 }
 
+/** The staged-import review panel: what came out of the file, before committing. */
+function renderImportPreview() {
+  const imp = state.pendingImport;
+  const panel = el("div", { class: "panel" });
+
+  const first = imp.rows[imp.rows.length - 1], last = imp.rows[0];
+  const span = imp.rows.length
+    ? [imp.rows.map((t) => t.date).sort()[0], imp.rows.map((t) => t.date).sort().pop()]
+    : ["—", "—"];
+
+  panel.append(el("h3", { text: "Review this import" }));
+
+  panel.append(el("dl", { class: "facts" }, [
+    el("dt", { text: "File" }),     el("dd", { text: imp.filename }),
+    el("dt", { text: "Format" }),   el("dd", { text: imp.parserLabel }),
+    el("dt", { text: "Rows read" }), el("dd", { text: String(imp.rows.length + imp.problems.length) }),
+    el("dt", { text: "New" }),      el("dd", { text: String(imp.fresh.length) }),
+    el("dt", { text: "Duplicates" }), el("dd", { text: String(imp.duplicates) }),
+    el("dt", { text: "Date range" }), el("dd", { text: span[0] + " \u2192 " + span[1] }),
+    el("dt", { text: "Kinds" }),    el("dd", { text: typeBreakdown(imp.rows).map(([k, n]) => `${n} ${k}`).join(", ") }),
+  ]));
+
+  panel.append(el("div", { class: "row", style: "margin-top:10px" }, [
+    el("label", { class: "small muted", for: "import-account-label", text: "Account name" }),
+    el("input", { class: "text", id: "import-account-label", value: imp.account.label, size: "24" }),
+    el("span", { class: "small muted", text: `id: ${imp.account.id}` }),
+  ]));
+
+  // Call out the rows that would otherwise produce a wrong number.
+  const transfers = imp.rows.filter((t) => t.type === "transfer");
+  const refunds = imp.rows.filter((t) => t.amount > 0 && t.type !== "transfer");
+
+  if (transfers.length) {
+    const total = transfers.reduce((sum, t) => sum + t.amount, 0);
+    panel.append(el("div", { class: "note", style: "margin-top:12px" }, [
+      el("strong", { text: `${plural(transfers.length, "card payment")} will be marked as transfers.` }),
+      `Together they total ${fmtMoney(total)}. This is money moving from another account of yours to ` +
+      `pay this card, not spending — counting it as income would understate what you actually spent ` +
+      `by that amount. They are excluded from every spending total. You can change any of them later.`,
+    ]));
+  }
+  if (refunds.length) {
+    const total = refunds.reduce((sum, t) => sum + t.amount, 0);
+    panel.append(el("div", { class: "note" }, [
+      el("strong", { text: `${plural(refunds.length, "refund")} totalling ${fmtMoney(total)}.` }),
+      "These stay as expenses so they reduce their category's total, rather than showing up as income.",
+    ]));
+  }
+  if (imp.flipped) {
+    panel.append(el("div", { class: "note warn" }, [
+      el("strong", { text: "Signs were flipped." }),
+      "This export reported purchases as positive. Every amount was inverted so money out is negative.",
+    ]));
+  }
+  if (imp.problems.length) {
+    panel.append(el("div", { class: "note warn" }, [
+      el("strong", { text: `${plural(imp.problems.length, "row")} could not be read and will be skipped.` }),
+      imp.problems.slice(0, 3).map((pr) => `line ${pr.line} (${pr.why})`).join("; "),
+    ]));
+  }
+
+  // A look at what is about to land.
+  const preview = imp.fresh.length ? imp.fresh : imp.rows;
+  panel.append(el("div", { class: "scroll", style: "margin-top:12px" }, [
+    el("table", { class: "tbl" }, [
+      el("thead", {}, el("tr", {}, [
+        el("th", { text: "Date" }), el("th", { text: "Description" }),
+        el("th", { text: "Chase says" }), el("th", { text: "Type" }),
+        el("th", { text: "Amount", style: "text-align:right" }),
+      ])),
+      el("tbody", {}, preview.slice(0, 40).map((tx) => el("tr", {}, [
+        el("td", { class: "date", text: tx.date }),
+        el("td", { class: "desc", text: tx.description }),
+        el("td", { class: "small muted", text: tx.issuer_category || "\u2014" }),
+        el("td", {}, el("span", {
+          class: "tag" + (tx.type === "transfer" ? " transfer" : tx.amount > 0 ? " refund" : ""),
+          text: tx.type === "transfer" ? "transfer" : tx.amount > 0 ? "refund" : tx.issuer_type.toLowerCase(),
+        })),
+        el("td", { class: "num " + (tx.amount < 0 ? "neg" : "pos"), text: fmtMoney(tx.amount) }),
+      ]))),
+    ]),
+  ]));
+  if (preview.length > 40) {
+    panel.append(el("p", { class: "small muted", style: "margin-top:6px",
+      text: `Showing the first 40 of ${preview.length}.` }));
+  }
+
+  panel.append(el("div", { class: "row", style: "margin-top:12px" }, [
+    el("button", {
+      class: "btn primary",
+      disabled: imp.fresh.length === 0,
+      onclick: () => run(commitImport),
+    }, imp.fresh.length
+        ? `Import ${plural(imp.fresh.length, "transaction")}`
+        : "Nothing new to import"),
+    el("button", { class: "btn", onclick: cancelImport }, "Cancel"),
+  ]));
+
+  return panel;
+}
+
+function renderLastImport() {
+  const imp = state.lastImport;
+  return el("div", { class: "panel" }, [
+    el("h3", { text: "Last import" }),
+    el("dl", { class: "facts" }, [
+      el("dt", { text: "File" }),        el("dd", { text: imp.filename }),
+      el("dt", { text: "Rows read" }),   el("dd", { text: String(imp.read) }),
+      el("dt", { text: "Imported" }),    el("dd", { text: String(imp.imported) }),
+      el("dt", { text: "Duplicates" }),  el("dd", { text: String(imp.duplicates) }),
+      el("dt", { text: "Unreadable" }),  el("dd", { text: String(imp.problems) }),
+      el("dt", { text: "When" }),        el("dd", { text: fmtDateTime(imp.at) }),
+    ]),
+  ]);
+}
+
+function pickStatementFile() {
+  const input = el("input", { type: "file", accept: ".csv,text/csv" });
+  input.addEventListener("change", () => {
+    if (input.files && input.files[0]) run(() => beginImport(input.files[0]));
+  });
+  input.click();
+}
+
 function renderDataView() {
   const body = $("#data-body");
   body.textContent = "";
   const s = summary();
 
+  if (state.pendingImport) { body.append(renderImportPreview()); return; }
+
   /* --- not connected to anything yet ------------------------------------ */
-  if (state.mode === "none") {
+  if (state.mode === "none" && !s.count) {
     body.append(el("div", { class: "empty" }, [
       el("h2", { text: "Connect your project folder" }),
       el("p", { class: "small" }, [
@@ -853,7 +1313,7 @@ function renderDataView() {
   const where = {
     folder: "Read and written directly in your project folder.",
     cache:  "Held in this browser only. Reconnect the folder to write it to disk.",
-    manual: "Loaded from a file you picked. Use Export to write it back to disk.",
+    manual: "Held in this browser only. Connect the project folder, or use Export to write it to disk.",
   }[state.mode];
 
   cols.append(el("div", { class: "panel" }, [
@@ -868,7 +1328,8 @@ function renderDataView() {
       el("dt", { text: "Last written" }), el("dd", { text: fmtDateTime(state.data.updated) }),
     ]),
     el("div", { class: "row", style: "margin-top:10px" }, [
-      el("button", { class: "btn primary", onclick: () => run(saveNow) }, "Save now"),
+      el("button", { class: "btn primary", onclick: pickStatementFile }, "Import statement\u2026"),
+      el("button", { class: "btn", onclick: () => run(saveNow) }, "Save now"),
       el("button", { class: "btn", onclick: exportDataFile }, "Export data file"),
       el("button", { class: "btn", onclick: pickDataFile }, "Load a data file…"),
       state.mode !== "folder" && hasFSA
@@ -895,6 +1356,8 @@ function renderDataView() {
   ]));
 
   body.append(cols);
+
+  if (state.lastImport) body.append(renderLastImport());
 
   body.append(el("div", { class: "panel" }, [
     el("h3", { text: "How this runs" }),
@@ -1012,7 +1475,16 @@ function wireDragAndDrop() {
     const json = files.find((f) => f.name.toLowerCase().endsWith(".json"));
     if (json) { run(() => loadDataFromBlob(json)); return; }
 
-    toast("Statement importing arrives in build step 2 — for now, only " + DATA_FILE + " loads.", true);
+    const csv = files.find((f) => f.name.toLowerCase().endsWith(".csv"));
+    if (csv) {
+      if (files.length > 1) {
+        toast(`Importing ${csv.name} \u2014 drop one file at a time so each can be reviewed.`);
+      }
+      run(() => beginImport(csv));
+      return;
+    }
+
+    toast("Drop a .csv statement or " + DATA_FILE + ". QFX, OFX and PDF come later.", true);
   });
 }
 
@@ -1095,6 +1567,14 @@ window.__finance = {
   migrate,
   summary,
   state,
+  // build step 2
+  parseCSV,
+  toISODate,
+  hashId,
+  assignIds,
+  PARSERS,
+  detectParser,
+  inferAccount,
 };
 
 if (new URLSearchParams(location.search).has("test")) {
