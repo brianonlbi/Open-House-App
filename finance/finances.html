@@ -46,6 +46,10 @@
   --warn:      #8a5a00;
   --warn-bg:   #fdf4e3;
 
+  --chart-mark: #1d63d1;
+  --chart-grid: #e6e8ec;
+  --chart-track: #eef0f3;
+
   --row-h: 26px;
   --radius: 4px;
 
@@ -71,6 +75,10 @@
     --neg:       #ff8266;
     --warn:      #e2b25f;
     --warn-bg:   #2e2718;
+
+  --chart-mark: #5690e8;
+  --chart-grid: #262b33;
+  --chart-track: #21252c;
   }
 }
 :root[data-theme="dark"] {
@@ -91,6 +99,10 @@
   --neg:       #ff8266;
   --warn:      #e2b25f;
   --warn-bg:   #2e2718;
+
+  --chart-mark: #5690e8;
+  --chart-grid: #262b33;
+  --chart-track: #21252c;
 }
 
 /* ------------------------------------------------------------------ base */
@@ -304,6 +316,61 @@ th .arrow { opacity: .6; font-size: 9px; }
 
 .warnish { color: var(--warn); font-weight: 600; }
 
+/* ------------------------------------------------------------ stat tiles */
+.stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.stat {
+  appearance: none; font: inherit; color: inherit; text-align: left;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-raised); padding: 8px 14px; min-width: 150px;
+  cursor: pointer;
+}
+.stat:disabled, .stat:not([onclick]) { cursor: default; }
+.stat:hover { background: var(--bg-hover); }
+.stat .lab { font-size: 11px; color: var(--text-dim); margin-bottom: 3px; }
+.stat .val {
+  font-family: var(--mono); font-size: 19px; font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.stat .sub { font-size: 11px; margin-top: 2px; }
+.stat.warn { border-color: var(--warn); }
+.stat.warn .val { color: var(--warn); }
+
+/* ---------------------------------------------------------------- chart */
+.overview-cols { grid-template-columns: minmax(420px, 1.4fr) minmax(320px, 1fr); }
+.chartwrap { margin-top: 10px; }
+svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+svg.chart .grid { stroke: var(--chart-grid); stroke-width: 1; shape-rendering: crispEdges; }
+svg.chart .axis { fill: var(--text-faint); font-size: 10px; font-family: var(--mono); }
+svg.chart .col { fill: var(--chart-mark); opacity: .62; transition: opacity .12s; }
+svg.chart .col.on { opacity: 1; }
+svg.chart .hit { fill: transparent; cursor: pointer; outline: none; }
+svg.chart .hit:hover + .col, svg.chart .hit:focus + .col { opacity: 1; }
+svg.chart .hit:focus { stroke: var(--accent); stroke-width: 1.5; }
+svg.chart .collabel {
+  fill: var(--text-dim); font-size: 10px; font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.charttip {
+  position: fixed; z-index: 70; pointer-events: none; opacity: 0;
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); padding: 6px 10px; font-size: 11px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); transition: opacity .1s;
+}
+.charttip.on { opacity: 1; }
+.charttip .t { color: var(--text-dim); }
+.charttip .v { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; }
+.charttip .s { color: var(--text-faint); }
+
+/* ------------------------------------------------- category share bars */
+td.barcell { width: 34%; padding-right: 12px; }
+td.barcell .bar {
+  height: 9px; border-radius: 2px;
+  background: var(--chart-mark); opacity: .62;
+}
+table.tbl tr.clickable { cursor: pointer; }
+table.tbl tr.clickable:hover td.barcell .bar { opacity: 1; }
+
 /* -------------------------------------------------------- bulk actions */
 .bulkbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -462,6 +529,7 @@ const state = {
   sort: { key: "date", dir: "desc" },
   rowLimit: 500,       // rendered rows before "show all"; keeps a big file responsive
   backlogLimit: 40,    // uncategorized merchants shown before "show more"
+  overview: { month: "", account: "" },
   selected: new Set(), // transaction ids ticked for a bulk change
   suggestRule: null,   // { match, category, count } offered after a manual recategorize
 };
@@ -1845,27 +1913,475 @@ function buildSteps() {
     "Preset questions",
     "Optional natural-language layer",
   ];
-  const doneThrough = 4;  // update as each slice lands
+  const doneThrough = 6;  // update as each slice lands
   return el("ul", { class: "steps" }, steps.map((label, i) => el("li", {
     class: i < doneThrough ? "done" : i === doneThrough ? "next" : "",
     text: `${i + 1}. ${label}`,
   })));
 }
 
+/* ------------------------------------------------------- overview: data */
+
+const monthOf = (iso) => String(iso || "").slice(0, 7);
+
+function monthLabel(month, short) {
+  const [y, m] = String(month).split("-").map(Number);
+  if (!y || !m) return month;
+  const date = new Date(Date.UTC(y, m - 1, 1));
+  return date.toLocaleDateString(undefined, {
+    month: short ? "short" : "long", year: "numeric", timeZone: "UTC",
+  });
+}
+
+/** Shift a YYYY-MM by n months. */
+function addMonths(month, n) {
+  const [y, m] = String(month).split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** First and last day of a month, as ISO dates, for drilling into the table. */
+const monthStart = (month) => `${month}-01`;
+const monthEnd = (month) => {
+  const [y, m] = month.split("-").map(Number);
+  return `${month}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
+};
+
+/** Every month that has at least one transaction, oldest first. */
+function monthsWithData(data) {
+  return [...new Set((data ? data.transactions : []).map((t) => monthOf(t.date)))]
+    .filter(Boolean).sort();
+}
+
+function overviewRows(data, { month, account } = {}) {
+  return (data ? data.transactions : []).filter((tx) => {
+    if (account && tx.account !== account) return false;
+    if (month && monthOf(tx.date) !== month) return false;
+    return true;
+  });
+}
+
+/**
+ * A continuous run of months, newest last, with no gaps.
+ *
+ * Gaps matter: skipping a month with no activity would compress the time axis
+ * and make the trend lie about when things happened.
+ */
+function monthlySeries(data, account, limit) {
+  const months = monthsWithData(data);
+  if (!months.length) return [];
+
+  const all = [];
+  for (let m = months[0]; m <= months[months.length - 1]; m = addMonths(m, 1)) all.push(m);
+  const window = limit && all.length > limit ? all.slice(-limit) : all;
+
+  return window.map((month) => {
+    const totals = totalsFor(overviewRows(data, { month, account }));
+    return { month, spend: Math.abs(totals.spend), income: totals.income, count: totals.count };
+  });
+}
+
+/** Categories in a set of rows, biggest first. Transfers are never spending. */
+function categoryBreakdown(rows) {
+  const totals = new Map();
+  for (const tx of rows) {
+    if (tx.type === "transfer" || tx.type === "income") continue;
+    const key = tx.category || UNCATEGORIZED;
+    if (!totals.has(key)) totals.set(key, { category: key, total: 0, count: 0 });
+    const entry = totals.get(key);
+    entry.total += tx.amount;
+    entry.count += 1;
+  }
+  return [...totals.values()]
+    .map((entry) => ({ ...entry, total: Math.round(entry.total * 100) / 100 }))
+    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+}
+
+/**
+ * Totals for a month, counted only up to a given day.
+ *
+ * The newest month in an export is nearly always incomplete, and comparing a
+ * half-finished month against a whole one invents a drop that is not there.
+ * This makes the comparison like-for-like.
+ */
+function totalsThroughDay(data, month, account, day) {
+  const lastDay = Number(monthEnd(month).slice(8));
+  const cutoff = `${month}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+  return totalsFor(overviewRows(data, { month, account }).filter((tx) => tx.date <= cutoff));
+}
+
+/** The last date anything happened, across the whole file. */
+function latestDate(data) {
+  return (data ? data.transactions : []).reduce((max, t) => (t.date > max ? t.date : max), "");
+}
+
+/** Compact money for a chart axis: $1.2k, $840. */
+function fmtMoneyShort(value) {
+  const n = Math.abs(value);
+  if (n >= 1000) return "$" + (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k";
+  return "$" + Math.round(n);
+}
+
+/**
+ * Send the transaction table to exactly the rows behind a number.
+ *
+ * Every number on the overview goes through here. That is the whole point of
+ * the dashboard: no figure is a dead end.
+ */
+function drillTo(filters) {
+  state.filters = {
+    account: filters.account || "",
+    category: filters.category || "",
+    type: filters.type || "",
+    from: filters.from || "",
+    to: filters.to || "",
+    q: "",
+    raw: state.filters.raw,
+  };
+  state.selected.clear();
+  state.suggestRule = null;
+  switchView("transactions");   // re-renders with the new filters
+}
+
+/* ---------------------------------------------------- overview: rendering */
+
+const svgEl = (tag, attrs, children) => {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, String(v));
+  }
+  for (const child of [].concat(children || [])) {
+    if (child == null) continue;
+    node.append(child.nodeType ? child : document.createTextNode(String(child)));
+  }
+  return node;
+};
+
+/** A column with a rounded cap and a square foot on the baseline. */
+function columnPath(x, y, w, h, r) {
+  const radius = Math.max(0, Math.min(r, w / 2, h));
+  return `M${x},${y + h}` +
+         `V${y + radius}` +
+         `A${radius},${radius} 0 0 1 ${x + radius},${y}` +
+         `H${x + w - radius}` +
+         `A${radius},${radius} 0 0 1 ${x + w},${y + radius}` +
+         `V${y + h}Z`;
+}
+
+/**
+ * Monthly spending, one column per month.
+ *
+ * One series, so one colour — colouring columns by size would burn the only
+ * free channel restating the height. Columns rather than a line because each
+ * one is a click target for "show me that month".
+ */
+function renderTrendChart(series, selected, account) {
+  if (!series.length) return null;
+
+  const W = 900, H = 190;
+  const padL = 46, padR = 10, padT = 16, padB = 24;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  const peak = Math.max(...series.map((d) => d.spend), 1);
+  const scale = (v) => (v / peak) * plotH;
+  const slot = plotW / series.length;
+  const barW = Math.min(24, Math.max(3, slot - 2));   // 2px surface gap between columns
+
+  const svg = svgEl("svg", {
+    viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img",
+    "aria-label": `Spending by month, ${series[0].month} to ${series[series.length - 1].month}`,
+  });
+
+  // Hairline grid, one shade off the surface, solid — never dashed.
+  for (let i = 0; i <= 2; i++) {
+    const value = (peak / 2) * i;
+    const y = padT + plotH - scale(value);
+    svg.append(svgEl("line", { x1: padL, y1: y, x2: W - padR, y2: y, class: "grid" }));
+    svg.append(svgEl("text", { x: padL - 6, y: y + 3, class: "axis", "text-anchor": "end" },
+      i === 0 ? "$0" : fmtMoneyShort(value)));
+  }
+
+  const biggest = series.reduce((best, d) => (d.spend > best.spend ? d : best), series[0]);
+
+  series.forEach((d, i) => {
+    const x = padL + i * slot + (slot - barW) / 2;
+    const h = scale(d.spend);
+    const y = padT + plotH - h;
+    const isSelected = d.month === selected;
+
+    // Hit target spans the whole slot, so a short column is still easy to click.
+    svg.append(svgEl("rect", {
+      x: padL + i * slot, y: padT, width: slot, height: plotH,
+      class: "hit", tabindex: "0", role: "button",
+      "aria-label": `${monthLabel(d.month)}: ${fmtMoney(-d.spend)} over ${d.count} transactions`,
+      onclick: () => drillTo({ from: monthStart(d.month), to: monthEnd(d.month), account }),
+      onkeydown: (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          drillTo({ from: monthStart(d.month), to: monthEnd(d.month), account });
+        }
+      },
+      onmouseenter: (ev) => showChartTip(ev, d),
+      onmousemove: (ev) => showChartTip(ev, d),
+      onmouseleave: hideChartTip,
+      onfocus: (ev) => showChartTip(ev, d),
+      onblur: hideChartTip,
+    }, svgEl("title", {}, `${monthLabel(d.month)} — ${fmtMoney(-d.spend)}`)));
+
+    if (d.spend > 0) {
+      svg.append(svgEl("path", {
+        d: columnPath(x, y, barW, h, 4),
+        class: "col" + (isSelected ? " on" : ""),
+      }));
+    }
+
+    // Label sparingly: the month in view and the biggest month, nothing else.
+    if (isSelected || (d.month === biggest.month && d.spend > 0)) {
+      svg.append(svgEl("text", {
+        x: x + barW / 2, y: Math.max(padT + 8, y - 5),
+        class: "collabel", "text-anchor": "middle",
+      }, fmtMoneyShort(d.spend)));
+    }
+
+    // Enough month ticks to orient, not one per column. Counted back from the
+    // newest month so the most recent one is always labelled and the spacing
+    // stays even — anchoring at the start leaves the last two labels colliding.
+    const every = Math.ceil(series.length / 12);
+    if ((series.length - 1 - i) % every === 0) {
+      svg.append(svgEl("text", {
+        x: x + barW / 2, y: H - 8, class: "axis", "text-anchor": "middle",
+      }, monthLabel(d.month, true).replace(" ", " ")));
+    }
+  });
+
+  return svg;
+}
+
+let chartTipEl = null;
+function showChartTip(ev, d) {
+  if (!chartTipEl) {
+    chartTipEl = el("div", { class: "charttip" });
+    document.body.append(chartTipEl);
+  }
+  chartTipEl.textContent = "";
+  chartTipEl.append(
+    el("div", { class: "t", text: monthLabel(d.month) }),
+    el("div", { class: "v", text: fmtMoney(-d.spend) }),
+    el("div", { class: "s", text: `${plural(d.count, "transaction")}${d.income ? " · income " + fmtMoney(d.income) : ""}` }),
+  );
+  chartTipEl.classList.add("on");
+  const box = (ev.target.getBoundingClientRect && ev.target.getBoundingClientRect()) || { left: 0, top: 0 };
+  const x = ev.clientX != null ? ev.clientX : box.left;
+  const y = ev.clientY != null ? ev.clientY : box.top;
+  chartTipEl.style.left = Math.min(window.innerWidth - 190, x + 12) + "px";
+  chartTipEl.style.top = Math.max(8, y - 56) + "px";
+}
+function hideChartTip() { if (chartTipEl) chartTipEl.classList.remove("on"); }
+
+/** A clickable stat tile: label, value, and what it is measured against. */
+function statTile({ label, value, sub, tone, onclick, title }) {
+  return el("button", {
+    class: "stat" + (tone ? " " + tone : ""), onclick, title: title || "",
+  }, [
+    el("div", { class: "lab", text: label }),
+    el("div", { class: "val", text: value }),
+    sub ? el("div", { class: "sub" }, sub) : null,
+  ]);
+}
+
+/** "12% more than last month", or nothing when there is no basis. */
+function deltaText(current, previous) {
+  if (!previous) return null;
+  const change = (current - previous) / Math.abs(previous);
+  if (!Number.isFinite(change)) return null;
+  const pct = Math.abs(change * 100);
+  if (pct < 0.5) return el("span", { class: "muted", text: "about the same" });
+  return el("span", { class: change > 0 ? "neg" : "pos" },
+    `${pct.toFixed(0)}% ${change > 0 ? "more" : "less"}`);
+}
+
 function renderOverview() {
-  const s = summary();
   const body = $("#overview-body");
   body.textContent = "";
-  $("#overview-period").textContent = s.first ? `${s.first} → ${s.last}` : "";
+  const data = state.data;
 
-  if (!s.count) {
+  if (!data || !data.transactions.length) {
+    $("#overview-period").textContent = "";
     body.append(emptyState(
       "Nothing imported yet",
-      "The overview fills in once there are transactions. Next up is the first CSV parser — " +
-      "tell me which account to start with and drop me a sample export.",
+      "The overview fills in once there are transactions. Every number here is clickable, " +
+      "and opens the transactions behind it.",
       true,
     ));
+    return;
   }
+
+  const months = monthsWithData(data);
+  if (!state.overview.month || !months.includes(state.overview.month)) {
+    state.overview.month = months[months.length - 1];
+  }
+  const month = state.overview.month;
+  const account = state.overview.account;
+
+  const thisMonth = totalsFor(overviewRows(data, { month, account }));
+  const prevMonth = totalsFor(overviewRows(data, { month: addMonths(month, -1), account }));
+  const yearAgo = totalsFor(overviewRows(data, { month: addMonths(month, -12), account }));
+  const anyIncome = data.transactions.some((t) => t.type === "income");
+
+  // The newest month is usually only part-way through. Say so, and compare it
+  // against the same stretch of the previous month rather than the whole of it.
+  const lastSeen = latestDate(data);
+  const throughDay = Number(lastSeen.slice(8, 10));
+  const partial = monthOf(lastSeen) === month && lastSeen < monthEnd(month);
+  const prevSame = partial
+    ? totalsThroughDay(data, addMonths(month, -1), account, throughDay)
+    : prevMonth;
+
+  $("#overview-period").textContent = monthLabel(month) +
+    (account ? " · " + accountLabel(account) : "");
+
+  /* ------------------------------------------------------------ controls */
+  const controls = el("div", { class: "filters" }, [
+    el("label", { text: "Month" }),
+    el("select", {
+      onchange: (ev) => { state.overview.month = ev.target.value; renderOverview(); },
+    }, months.slice().reverse().map((m) => el("option", {
+      value: m, selected: m === month, text: monthLabel(m),
+    }))),
+    el("label", { text: "Account" }),
+    el("select", {
+      onchange: (ev) => { state.overview.account = ev.target.value; renderOverview(); },
+    }, [el("option", { value: "", selected: !account, text: "All accounts" })].concat(
+      data.accounts.map((a) => el("option", {
+        value: a.id, selected: a.id === account, text: a.label,
+      })))),
+    el("span", { class: "small muted", text: "every number opens the transactions behind it" }),
+  ]);
+  body.append(controls);
+
+  /* --------------------------------------------------------------- tiles */
+  const drillMonth = (m, extra) => drillTo(Object.assign(
+    { from: monthStart(m), to: monthEnd(m), account }, extra || {}));
+
+  const tiles = el("div", { class: "stats" }, [
+    statTile({
+      label: "Spending in " + monthLabel(month, true) + (partial ? " so far" : ""),
+      value: fmtMoney(thisMonth.spend),
+      sub: el("span", {}, [
+        deltaText(Math.abs(thisMonth.spend), Math.abs(prevSame.spend)) || null,
+        el("span", { class: "muted", text: (deltaText(Math.abs(thisMonth.spend), Math.abs(prevSame.spend)) ? " " : "") +
+          (partial
+            ? `than the 1st\u2013${throughDay}th of ${monthLabel(addMonths(month, -1), true)}`
+            : `than ${monthLabel(addMonths(month, -1), true)}`) }),
+      ]),
+      onclick: () => drillMonth(month),
+      title: partial
+        ? `Only the 1st to the ${throughDay}th are in this file, so the comparison uses the ` +
+          `same days of the previous month.`
+        : "Transfers between your own accounts are excluded",
+    }),
+    statTile({
+      label: monthLabel(addMonths(month, -1), true) + (partial ? ", whole month" : ""),
+      value: fmtMoney(prevMonth.spend),
+      sub: el("span", { class: "muted", text: plural(prevMonth.count, "row") }),
+      onclick: () => drillMonth(addMonths(month, -1)),
+    }),
+    statTile({
+      label: monthLabel(addMonths(month, -12), true),
+      value: yearAgo.count ? fmtMoney(yearAgo.spend) : "—",
+      sub: el("span", { class: "muted", text: yearAgo.count ? "a year earlier" : "no data yet" }),
+      onclick: yearAgo.count ? () => drillMonth(addMonths(month, -12)) : undefined,
+    }),
+  ]);
+
+  if (anyIncome) {
+    tiles.append(statTile({
+      label: "Income in " + monthLabel(month, true),
+      value: fmtMoney(thisMonth.income),
+      sub: el("span", { class: thisMonth.income + thisMonth.spend >= 0 ? "pos" : "neg" },
+        fmtMoney(thisMonth.income + thisMonth.spend) + " net"),
+      onclick: () => drillMonth(month, { type: "income" }),
+    }));
+  }
+  if (thisMonth.transfers) {
+    tiles.append(statTile({
+      label: "Moved between accounts",
+      value: fmtMoney(thisMonth.transfers),
+      sub: el("span", { class: "muted", text: "not spending" }),
+      onclick: () => drillMonth(month, { type: "transfer" }),
+    }));
+  }
+  const uncategorized = data.transactions.filter(
+    (t) => (!t.category || t.category === UNCATEGORIZED) && (!account || t.account === account));
+  if (uncategorized.length) {
+    tiles.append(statTile({
+      label: "Uncategorized",
+      value: uncategorized.length.toLocaleString(),
+      tone: "warn",
+      sub: el("span", { class: "muted", text: "across all months" }),
+      onclick: () => drillTo({ category: UNCATEGORIZED, account }),
+    }));
+  }
+  body.append(tiles);
+
+  if (!anyIncome) {
+    body.append(el("p", { class: "small muted", style: "margin:-4px 0 12px" },
+      "Income appears here once a checking or savings account is imported — a credit card " +
+      "only ever shows money going out and payments coming in."));
+  }
+
+  /* ----------------------------------------------------- chart + breakdown */
+  const cols = el("div", { class: "cols overview-cols" });
+
+  const series = monthlySeries(data, account, 36);
+  const chartPanel = el("div", { class: "panel" }, [
+    el("h3", { text: "Spending by month" }),
+    el("p", { class: "small muted",
+      text: "Transfers excluded. Click a column for that month’s transactions." }),
+  ]);
+  const chart = renderTrendChart(series, month, account);
+  if (chart) chartPanel.append(el("div", { class: "chartwrap" }, chart));
+  cols.append(chartPanel);
+
+  const rows = overviewRows(data, { month, account });
+  const breakdown = categoryBreakdown(rows);
+  const worst = breakdown.length ? Math.abs(breakdown[0].total) : 1;
+
+  const catPanel = el("div", { class: "panel" }, [
+    el("h3", { text: `Categories in ${monthLabel(month, true)}` }),
+    el("p", { class: "small muted",
+      text: "Biggest first. Click a row for the transactions that make it up." }),
+  ]);
+
+  if (!breakdown.length) {
+    catPanel.append(el("p", { class: "small muted", text: "No spending in this month." }));
+  } else {
+    catPanel.append(el("div", { class: "scroll", style: "margin-top:8px;max-height:300px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "Category" }), el("th", { text: "Rows" }),
+          el("th", { text: "Share" }), el("th", { text: "Total", style: "text-align:right" }),
+        ])),
+        el("tbody", {}, breakdown.map((entry) => el("tr", {
+          class: "clickable",
+          onclick: () => drillTo({
+            from: monthStart(month), to: monthEnd(month),
+            category: entry.category, account,
+          }),
+        }, [
+          el("td", { class: "small" + (entry.category === UNCATEGORIZED ? " muted" : ""),
+                     text: entry.category }),
+          el("td", { class: "num", text: String(entry.count) }),
+          el("td", { class: "barcell" },
+            el("div", { class: "bar", style: `width:${Math.max(2, (Math.abs(entry.total) / worst) * 100)}%` })),
+          el("td", { class: "num " + (entry.total < 0 ? "neg" : "pos"), text: fmtMoney(entry.total) }),
+        ]))),
+      ])));
+  }
+  cols.append(catPanel);
+  body.append(cols);
 }
 
 /* ------------------------------------------------------- transaction view */
@@ -3098,6 +3614,7 @@ function switchView(name) {
   state.view = name;
   $$(".tab").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.view === name)));
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === "view-" + name));
+  if (state.data) render();
 }
 
 function setTheme(theme) {
@@ -3268,6 +3785,19 @@ window.__finance = {
   parserFromSpec,
   makeCsvParser,
   allParsers,
+  // build step 6
+  monthOf,
+  monthLabel,
+  addMonths,
+  monthStart,
+  monthEnd,
+  monthsWithData,
+  monthlySeries,
+  categoryBreakdown,
+  overviewRows,
+  fmtMoneyShort,
+  totalsThroughDay,
+  latestDate,
   // build step 4
   merchantKey,
   suggestMatch,

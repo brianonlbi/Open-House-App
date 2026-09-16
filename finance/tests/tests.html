@@ -871,6 +871,165 @@ async function run(API) {
        data.transactions.find((t) => t.description.includes("INTEREST")).category === API.FEES_CATEGORY);
   }
 
+  describe("month arithmetic");
+  {
+    eq("month of a date", API.monthOf("2026-09-14"), "2026-09");
+    eq("previous month", API.addMonths("2026-09", -1), "2026-08");
+    eq("crosses a year backwards", API.addMonths("2026-01", -1), "2025-12");
+    eq("a year earlier", API.addMonths("2026-09", -12), "2025-09");
+    eq("crosses a year forwards", API.addMonths("2025-12", 1), "2026-01");
+    eq("month start", API.monthStart("2026-09"), "2026-09-01");
+    eq("month end, 30 days", API.monthEnd("2026-09"), "2026-09-30");
+    eq("month end, 31 days", API.monthEnd("2026-07"), "2026-07-31");
+    eq("month end, February", API.monthEnd("2026-02"), "2026-02-28");
+    eq("month end, leap February", API.monthEnd("2024-02"), "2024-02-29");
+    ok("labels are readable", API.monthLabel("2026-09").includes("2026"), API.monthLabel("2026-09"));
+  }
+
+  describe("monthlySeries — gaps are months, not skipped");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "1", date: "2026-01-10", amount: -100, type: "expense", account: "a", category: "X" },
+      // nothing at all in February
+      { id: "2", date: "2026-03-05", amount: -50,  type: "expense", account: "a", category: "X" },
+      { id: "3", date: "2026-03-06", amount: -25,  type: "expense", account: "b", category: "X" },
+    ]});
+    const series = API.monthlySeries(data, "", 36);
+    eq("every month in range is present", series.length, 3);
+    deepEq("including the empty one", series.map((d) => d.month), ["2026-01", "2026-02", "2026-03"]);
+    eq("the empty month is zero, not missing", series[1].spend, 0);
+    eq("spend is a magnitude, ready for a bar height", series[0].spend, 100);
+    eq("months sum across accounts", series[2].spend, 75);
+
+    const justA = API.monthlySeries(data, "a", 36);
+    eq("filtering by account changes the totals", justA[2].spend, 50);
+
+    const capped = API.monthlySeries(data, "", 2);
+    eq("the window keeps the most recent months", capped.length, 2);
+    eq("ending at the latest", capped[capped.length - 1].month, "2026-03");
+  }
+
+  describe("monthlySeries excludes transfers from the trend");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "1", date: "2026-01-10", amount: -100, type: "expense", account: "a", category: "X" },
+      { id: "2", date: "2026-01-11", amount: 900,  type: "transfer", account: "a", category: "Transfer" },
+    ]});
+    const series = API.monthlySeries(data, "", 36);
+    eq("a card payment does not shrink the month's spending", series[0].spend, 100);
+  }
+
+  describe("categoryBreakdown — biggest first, transfers and income out");
+  {
+    const rows = [
+      { amount: -50,  type: "expense", category: "Gas" },
+      { amount: -30,  type: "expense", category: "Gas" },
+      { amount: -200, type: "expense", category: "Repairs" },
+      { amount: 10,   type: "expense", category: "Gas" },          // a refund
+      { amount: 900,  type: "transfer", category: "Transfer" },
+      { amount: 2000, type: "income",   category: "Salary" },
+      { amount: -15,  type: "expense", category: "" },             // no category yet
+    ];
+    const out = API.categoryBreakdown(rows);
+    eq("transfers and income are not categories of spending", out.length, 3);
+    eq("biggest first", out[0].category, "Repairs");
+    eq("with its total", out[0].total, -200);
+    eq("a refund nets against its own category", out[1].total, -70);
+    eq("and the row count is the rows, refund included", out[1].count, 3);
+    eq("a blank category becomes Uncategorized", out[2].category, API.UNCATEGORIZED);
+  }
+
+  describe("overviewRows — the exact rows behind a number");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "1", date: "2026-01-10", amount: -100, type: "expense", account: "a" },
+      { id: "2", date: "2026-02-10", amount: -50,  type: "expense", account: "a" },
+      { id: "3", date: "2026-02-11", amount: -25,  type: "expense", account: "b" },
+    ]});
+    eq("by month", API.overviewRows(data, { month: "2026-02" }).length, 2);
+    eq("by account", API.overviewRows(data, { account: "a" }).length, 2);
+    eq("by both", API.overviewRows(data, { month: "2026-02", account: "b" }).length, 1);
+    eq("no filter is everything", API.overviewRows(data, {}).length, 3);
+  }
+
+  describe("fmtMoneyShort — compact axis labels");
+  {
+    eq("hundreds stay exact", API.fmtMoneyShort(840), "$840");
+    eq("thousands get one decimal", API.fmtMoneyShort(1240), "$1.2k");
+    eq("big numbers drop it", API.fmtMoneyShort(24500), "$25k");
+    eq("sign is dropped — the axis is a magnitude", API.fmtMoneyShort(-1240), "$1.2k");
+    eq("zero", API.fmtMoneyShort(0), "$0");
+  }
+
+  describe("the dashboard's numbers agree with the table's");
+  {
+    const chaseCsv = await sample("chase_card-sample.csv");
+    const rows = API.PARSERS.chase_card.parse(chaseCsv, "c.csv", "chase").transactions;
+    rows.forEach((t) => { t.source_parser = "chase_card"; });
+    const data = API.migrate({ transactions: rows });
+    API.assignIds(data.transactions);
+    API.recategorizeAll(data);
+
+    const month = API.monthsWithData(data)[0];
+    const monthRows = API.overviewRows(data, { month });
+    const totals = API.totalsFor(monthRows);
+    const breakdown = API.categoryBreakdown(monthRows);
+
+    const summed = breakdown.reduce((sum, e) => sum + e.total, 0);
+    eq("the category breakdown adds up to the month's spending",
+       Math.round(summed * 100) / 100, totals.spend);
+
+    // A drill-down must land on exactly the rows the number was made of.
+    const first = breakdown[0];
+    const drilled = monthRows.filter((t) => t.category === first.category && t.type !== "transfer");
+    eq("drilling a category finds its rows", drilled.length, first.count);
+    eq("and they sum to the number clicked",
+       Math.round(drilled.reduce((s, t) => s + t.amount, 0) * 100) / 100, first.total);
+  }
+
+  describe("partial months are not compared against whole ones");
+  {
+    const data = API.migrate({ transactions: [
+      // August, a complete month
+      { id: "a1", date: "2026-08-05", amount: -100, type: "expense", account: "a" },
+      { id: "a2", date: "2026-08-10", amount: -100, type: "expense", account: "a" },
+      { id: "a3", date: "2026-08-25", amount: -800, type: "expense", account: "a" },
+      // September, only up to the 14th
+      { id: "b1", date: "2026-09-06", amount: -110, type: "expense", account: "a" },
+      { id: "b2", date: "2026-09-12", amount: -110, type: "expense", account: "a" },
+    ]});
+
+    eq("the file ends mid-month", API.latestDate(data), "2026-09-14".slice(0, 8) + "12");
+
+    const sept = API.totalsFor(API.overviewRows(data, { month: "2026-09" }));
+    const augWhole = API.totalsFor(API.overviewRows(data, { month: "2026-08" }));
+    const augSame = API.totalsThroughDay(data, "2026-08", "", 12);
+
+    eq("September so far", sept.spend, -220);
+    eq("August in full", augWhole.spend, -1000);
+    eq("August through the same day", augSame.spend, -200);
+
+    // Against the whole month it looks like a 78% collapse in spending.
+    // Against the same days it is a 10% rise, which is the truth.
+    ok("comparing to the whole month invents a fall",
+       (Math.abs(sept.spend) - Math.abs(augWhole.spend)) / Math.abs(augWhole.spend) < -0.7);
+    ok("comparing like days shows the real direction",
+       (Math.abs(sept.spend) - Math.abs(augSame.spend)) / Math.abs(augSame.spend) > 0);
+
+    eq("a day past the month end just means the whole month",
+       API.totalsThroughDay(data, "2026-08", "", 31).spend, -1000);
+    eq("and a short month clamps rather than overflowing",
+       API.totalsThroughDay(data, "2026-02", "", 31).spend, 0);
+  }
+
+  describe("latestDate");
+  {
+    eq("finds the newest date regardless of order", API.latestDate(API.migrate({ transactions: [
+      { id: "1", date: "2025-01-01" }, { id: "2", date: "2026-09-14" }, { id: "3", date: "2024-06-30" },
+    ]})), "2026-09-14");
+    eq("empty file has no latest date", API.latestDate(API.migrate({ transactions: [] })), "");
+  }
+
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");
   summary.className = failed ? "fail" : "pass";

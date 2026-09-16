@@ -381,6 +381,51 @@ transactions, and the filter that produced them.
   exactly what it is made of. No number in this app is a mystery. This is the
   whole point — honor it in every new view.
 
+### Overview dashboard
+
+Every figure routes through `drillTo()`, which sets the transaction filters and
+switches tabs. That is the contract: **no number on this page is a dead end.**
+Tiles, chart columns, category rows and the uncategorized count all drill.
+
+`switchView()` re-renders. Without it, categorizing on one tab leaves the
+Overview showing pre-edit numbers, and a dashboard that disagrees with the table
+behind it is worse than no dashboard at all.
+
+**Partial months are compared like-for-like.** The newest month in an export is
+nearly always incomplete. On the first real data the tile read "36% less than
+last month" when the file only ran to the 14th — the truth was 7% *more*.
+`totalsThroughDay()` clips the previous month to the same day, and the tile says
+which days it compared. Never compare a part-month against a whole one.
+
+`monthlySeries()` fills gaps: a month with no activity is a zero column, not a
+missing one, or the time axis compresses and the trend lies about when things
+happened.
+
+#### Chart rules
+
+The trend is a **column chart, one series, one colour**. Columns rather than a
+line because each column is the click target for "show me that month".
+
+Colours were validated with the dataviz skill's checker, not chosen by eye:
+
+- `--chart-mark` is `#1d63d1` light / `#5690e8` dark. These are **not** the UI
+  `--accent`, deliberately: a link is a text colour judged on WCAG contrast, a
+  chart mark is judged on the OKLCH lightness band (0.43–0.77 light, 0.48–0.67
+  dark). The dark accent `#6fa4ff` sits at L 0.721 and fails that band.
+- The red/green `--pos`/`--neg` pair **fails CVD separation** (ΔE 5.1 deutan).
+  That is fine for a signed number, which carries a minus sign and a value, and
+  is why no chart mark is ever distinguished by red-versus-green alone. If a
+  second series is ever added, separate it by something other than those two.
+- Do not colour category bars by size or by category. One series, one colour —
+  a value-ramp on nominal categories burns the only free channel restating the
+  bar length.
+
+Mark specs: columns capped at 24px with a 2px surface gap, 4px rounded cap and a
+square foot on the baseline, hairline solid grid (never dashed), labels only on
+the selected and the largest column, hit targets spanning the full slot, and a
+hover tooltip. Month ticks are counted back from the newest month so the latest
+is always labelled and the spacing stays even.
+
 ### Building the category list
 
 `uncategorizedGroups(data)` is the heart of step 4: uncategorized transactions
@@ -451,8 +496,8 @@ Working vertical slices, stopping after each so the user can try it.
 2. ✅ One CSV parser for one account, plus dedup, importing into the data model.
 3. ✅ Transaction table with filters, separated by account.
 4. ✅ Categorization rules, the backlog, and the overrides UI.
-5. ⬜ Transfer and refund handling (cross-account matching). **Next.**
-6. ⬜ Overview dashboard with drill-down.
+5. ⬜ Transfer and refund handling (cross-account matching). Needs the checking export. **Next.**
+6. ✅ Overview dashboard with drill-down.
 7. ⬜ Preset questions.
 8. ⬜ Optional natural language layer.
 

@@ -75,6 +75,23 @@ rows to set them all at once. Notes are editable the same way.
 
 Nothing is ever baked in. Change a rule and the whole history re-derives.
 
+## The overview
+
+The **Overview** tab is the landing page: spending this month against last month
+and against the same month a year ago, a column per month going back as far as
+your data, and the categories for the month you're looking at, biggest first.
+
+**Every number opens the transactions behind it.** Click a tile, a column, or a
+category row and the table opens filtered to exactly those rows. If a figure
+ever looks wrong, click it and count.
+
+When the newest month is only part-way through, the tile says "so far" and
+compares against the *same days* of the previous month rather than the whole of
+it — otherwise a half-finished month always looks like a spending collapse.
+
+Transfers between your own accounts are excluded from every total on this page,
+and called out separately so you can see they were counted and set aside.
+
 ## Where things are
 
 - `finances-data.json` — everything: transactions, rules, notes. **Back this up.**
