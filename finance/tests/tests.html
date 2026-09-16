@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Household Finances — tests</title>
+<!--
+  Tests. No npm, no build step, no runner to install.
+
+  Start the app with start.command, then open:
+      http://localhost:8777/tests/tests.html
+
+  It loads ../finances.html?test=1 in a hidden iframe. The ?test=1 flag makes
+  the app skip its own startup, so running tests never touches your real data
+  file, your folder permission, or the browser cache.
+
+  Each parser added in build step 2 onward gets its own block below, checked
+  against the anonymized fixtures in tests/samples/.
+-->
+<style>
+  body { font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
+         margin: 24px; max-width: 900px; color: #16191d; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .meta { color: #5c6370; margin-bottom: 16px; }
+  #summary { font-weight: 600; padding: 8px 12px; border-radius: 4px; margin-bottom: 16px; }
+  #summary.pass { background: #e4f6eb; color: #17733f; }
+  #summary.fail { background: #fdecea; color: #a8301c; }
+  .group { margin-bottom: 14px; }
+  .group > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+                color: #5c6370; margin: 0 0 4px; }
+  .case { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+          padding: 2px 0 2px 20px; position: relative; }
+  .case.ok::before   { content: "✓"; position: absolute; left: 2px; color: #17733f; }
+  .case.bad::before  { content: "✗"; position: absolute; left: 2px; color: #a8301c; }
+  .case.bad { color: #a8301c; }
+  .detail { color: #5c6370; padding-left: 22px; font-size: 11px; white-space: pre-wrap; }
+  iframe { display: none; }
+</style>
+</head>
+<body>
+<h1>Household Finances — tests</h1>
+<div class="meta">Run from a served origin, not <code>file://</code>.</div>
+<div id="summary">Running…</div>
+<div id="results"></div>
+<iframe id="app" src="../finances.html?test=1"></iframe>
+
+<script>
+"use strict";
+
+/* --------------------------------------------------------------- harness */
+let passed = 0, failed = 0, group = null;
+
+function describe(name) {
+  group = document.createElement("div");
+  group.className = "group";
+  group.innerHTML = "<h2></h2>";
+  group.querySelector("h2").textContent = name;
+  document.getElementById("results").append(group);
+}
+
+function ok(name, cond, detail) {
+  const line = document.createElement("div");
+  line.className = "case " + (cond ? "ok" : "bad");
+  line.textContent = name;
+  group.append(line);
+  if (cond) { passed++; return; }
+  failed++;
+  if (detail !== undefined) {
+    const d = document.createElement("div");
+    d.className = "detail";
+    d.textContent = String(detail);
+    group.append(d);
+  }
+}
+
+const eq = (name, actual, expected) =>
+  ok(name, Object.is(actual, expected), `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+
+const deepEq = (name, actual, expected) =>
+  ok(name, JSON.stringify(actual) === JSON.stringify(expected),
+     `expected ${JSON.stringify(expected)}\n     got ${JSON.stringify(actual)}`);
+
+/** Fetch an anonymized fixture from tests/samples/. */
+async function sample(filename) {
+  const res = await fetch("samples/" + filename);
+  if (!res.ok) throw new Error(`fixture samples/${filename} not found (${res.status})`);
+  return res.text();
+}
+
+/* ------------------------------------------------------------------ run */
+async function run(API) {
+
+  describe("data model");
+  {
+    const fresh = API.newDataFile();
+    eq("new file carries the current schema version", fresh.schema_version, API.SCHEMA_VERSION);
+    deepEq("new file starts with no transactions", fresh.transactions, []);
+    deepEq("new file starts with no categories (they are yours to choose)", fresh.categories, []);
+    deepEq("new file starts with no rules", fresh.rules, []);
+    deepEq("new file starts with no overrides", fresh.overrides, {});
+    ok("new file records when it was created", typeof fresh.created === "string" && fresh.created.includes("T"));
+  }
+
+  describe("migrate() — old or hand-edited files are repaired, not rejected");
+  {
+    const bare = API.migrate({ transactions: [{ id: "a", date: "2026-01-01", amount: -5 }] });
+    eq("stamps the current schema version", bare.schema_version, API.SCHEMA_VERSION);
+    eq("keeps the transactions it was given", bare.transactions.length, 1);
+    deepEq("fills in a missing rules array", bare.rules, []);
+    deepEq("fills in a missing overrides object", bare.overrides, {});
+    deepEq("fills in a missing column_maps object", bare.column_maps, {});
+
+    const corrupt = API.migrate({ transactions: null, rules: "nope", overrides: 7 });
+    deepEq("repairs a non-array transactions field", corrupt.transactions, []);
+    deepEq("repairs a non-array rules field", corrupt.rules, []);
+    deepEq("repairs a non-object overrides field", corrupt.overrides, {});
+
+    const existing = API.migrate({ created: "2020-01-01T00:00:00.000Z", transactions: [] });
+    eq("does not overwrite the original created date", existing.created, "2020-01-01T00:00:00.000Z");
+  }
+
+  describe("summary() — the numbers in the status bar");
+  {
+    const saved = API.state.data;
+    API.state.data = API.migrate({ transactions: [
+      { id:"1", date:"2026-03-04", amount:-20, account:"amex",     category:"Gas" },
+      { id:"2", date:"2026-01-09", amount:-60, account:"checking", category:"" },
+      { id:"3", date:"2026-02-02", amount:-15, account:"checking", category:"Uncategorized" },
+    ]});
+    const s = API.summary();
+    eq("counts every transaction", s.count, 3);
+    eq("counts distinct accounts", s.accounts, 2);
+    eq("finds the earliest date", s.first, "2026-01-09");
+    eq("finds the latest date", s.last, "2026-03-04");
+    eq("counts blank and 'Uncategorized' alike as uncategorized", s.uncategorized, 2);
+
+    API.state.data = API.migrate({ transactions: [] });
+    const none = API.summary();
+    eq("empty file counts zero", none.count, 0);
+    eq("empty file has no date range", none.first, null);
+
+    API.state.data = saved;
+  }
+
+  /* Build step 2 adds, for each institution:
+   *
+   *   describe("parser: <institution>");
+   *   const csv = await sample("<institution>-sample.csv");
+   *   const rows = API.parsers["<institution>"](csv, "<institution>-sample.csv");
+   *   eq("reads every row", rows.length, N);
+   *   eq("keeps the raw description verbatim", rows[0].description, "...");
+   *   eq("money out is negative", rows[0].amount, -12.34);
+   *   eq("dates are ISO", rows[0].date, "2026-01-05");
+   *   ... plus dedup: the same file parsed twice yields identical ids.
+   */
+
+  /* ------------------------------------------------------------ report */
+  const summary = document.getElementById("summary");
+  summary.className = failed ? "fail" : "pass";
+  summary.textContent = failed
+    ? `${failed} failed, ${passed} passed`
+    : `All ${passed} checks passed`;
+  document.title = (failed ? `✗ ${failed} failing` : `✓ ${passed} passing`) + " — Household Finances tests";
+}
+
+const frame = document.getElementById("app");
+frame.addEventListener("load", () => {
+  const API = frame.contentWindow.__finance;
+  if (!API) {
+    const summary = document.getElementById("summary");
+    summary.className = "fail";
+    summary.textContent = "Could not reach the app's test API. Is finances.html being served over http://localhost?";
+    return;
+  }
+  run(API).catch((err) => {
+    const summary = document.getElementById("summary");
+    summary.className = "fail";
+    summary.textContent = "Test run threw: " + err.message;
+    console.error(err);
+  });
+});
+</script>
+</body>
+</html>

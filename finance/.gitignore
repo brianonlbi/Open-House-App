@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# Household Finance Tracker — nothing sensitive goes in git.
+# Code is versioned. Financial data never is.
+# ---------------------------------------------------------------------------
+
+# The data file and its backup (all imported transactions live here)
+finances-data.json
+finances-data.backup.json
+finances-data*.json
+
+# API keys / local settings
+config.json
+
+# Raw statements, wherever they get dropped
+statements/
+downloads/
+*.csv
+*.tsv
+*.qfx
+*.ofx
+*.qbo
+*.qif
+*.pdf
+
+# ...except the anonymized fixtures the parser tests run against.
+!tests/samples/
+!tests/samples/**
+
+# macOS noise
+.DS_Store
+._*

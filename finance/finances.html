@@ -1,0 +1,1109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Household Finances</title>
+<!-- Inline favicon: keeps the launcher from logging a 404 on every load. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231d63d1'/%3E%3Ctext x='8' y='12' font-size='11' font-family='monospace' font-weight='bold' text-anchor='middle' fill='white'%3E$%3C/text%3E%3C/svg%3E">
+<!--
+  Household Finance Tracker — single file, no build step.
+
+  Everything is in this file: markup, styles, and script. Open it in a text
+  editor and read top to bottom. The script is divided into labelled sections:
+
+    1. Constants and state
+    2. Small utilities
+    3. Key/value cache (IndexedDB)
+    4. Disk layer (File System Access API)
+    5. Data model
+    6. Derived views of the data
+    7. Rendering
+    8. Wiring
+
+  Launch it with start.command, never by double-clicking this file directly.
+-->
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root {
+  color-scheme: light dark;
+
+  --bg:        #ffffff;
+  --bg-sunk:   #f4f5f7;
+  --bg-raised: #ffffff;
+  --bg-hover:  #eef0f3;
+  --border:    #d8dbe0;
+  --border-strong: #b9bec6;
+
+  --text:      #16191d;
+  --text-dim:  #5c6370;
+  --text-faint:#8b929d;
+
+  --accent:    #1d63d1;
+  --accent-bg: #e8f0fd;
+  --pos:       #17733f;
+  --neg:       #a8301c;
+  --warn:      #8a5a00;
+  --warn-bg:   #fdf4e3;
+
+  --row-h: 26px;
+  --radius: 4px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #14161a;
+    --bg-sunk:   #0e1013;
+    --bg-raised: #1b1e24;
+    --bg-hover:  #23272f;
+    --border:    #2c313a;
+    --border-strong: #3d434e;
+
+    --text:      #e6e9ee;
+    --text-dim:  #a0a7b4;
+    --text-faint:#6f7784;
+
+    --accent:    #6fa4ff;
+    --accent-bg: #1a2740;
+    --pos:       #4fc27e;
+    --neg:       #ff8266;
+    --warn:      #e2b25f;
+    --warn-bg:   #2e2718;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:        #14161a;
+  --bg-sunk:   #0e1013;
+  --bg-raised: #1b1e24;
+  --bg-hover:  #23272f;
+  --border:    #2c313a;
+  --border-strong: #3d434e;
+
+  --text:      #e6e9ee;
+  --text-dim:  #a0a7b4;
+  --text-faint:#6f7784;
+
+  --accent:    #6fa4ff;
+  --accent-bg: #1a2740;
+  --pos:       #4fc27e;
+  --neg:       #ff8266;
+  --warn:      #e2b25f;
+  --warn-bg:   #2e2718;
+}
+
+/* ------------------------------------------------------------------ base */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+}
+h1, h2, h3 { margin: 0; font-weight: 600; }
+h2 { font-size: 14px; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+p { margin: 0 0 8px; }
+a { color: var(--accent); }
+code, .num { font-family: var(--mono); }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ------------------------------------------------------------------ chrome */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 12px; height: 40px; flex: none;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.brand .sub { color: var(--text-faint); font-weight: 400; margin-left: 6px; }
+
+.tabs { display: flex; gap: 2px; }
+.tab {
+  appearance: none; border: 0; background: none; color: var(--text-dim);
+  font: inherit; padding: 4px 10px; border-radius: var(--radius); cursor: pointer;
+}
+.tab:hover { background: var(--bg-hover); color: var(--text); }
+.tab[aria-selected="true"] { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+
+.spacer { flex: 1; }
+
+button.btn {
+  appearance: none; font: inherit; cursor: pointer;
+  background: var(--bg-raised); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  padding: 3px 10px;
+}
+button.btn:hover:not(:disabled) { background: var(--bg-hover); }
+button.btn:disabled { opacity: .45; cursor: default; }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+button.btn.danger { color: var(--neg); border-color: var(--neg); background: none; }
+button.btn.link {
+  border: 0; background: none; color: var(--accent); padding: 0; text-decoration: underline;
+}
+
+/* file status pill in the top bar */
+.filestate {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-dim);
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px;
+  max-width: 34ch;
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.dot.ok    { background: var(--pos); }
+.dot.warn  { background: var(--warn); }
+.dot.error { background: var(--neg); }
+.filestate .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ------------------------------------------------------------------ layout */
+main { flex: 1; overflow: auto; }
+.view { display: none; padding: 16px; max-width: 100%; }
+.view.active { display: block; }
+.view-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.view-head .hint { color: var(--text-faint); font-size: 12px; }
+
+.statusbar {
+  flex: none; display: flex; align-items: center; gap: 16px;
+  height: 24px; padding: 0 12px;
+  background: var(--bg-sunk); border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-dim);
+}
+.statusbar .num { font-size: 11px; }
+
+/* ------------------------------------------------------------------ panels */
+.panel {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px; margin-bottom: 12px;
+}
+.panel > h3 { margin-bottom: 8px; }
+.panel .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.panel .row + .row { margin-top: 8px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; align-items: start; }
+
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; margin: 0; }
+dl.facts dt { color: var(--text-dim); }
+dl.facts dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ empty */
+.empty {
+  border: 1px dashed var(--border-strong); border-radius: var(--radius);
+  padding: 28px 24px; text-align: center; color: var(--text-dim);
+  background: var(--bg-sunk);
+  max-width: 780px;          /* don't stretch a dashed box across a 27" display */
+  margin: 0 auto;
+}
+.empty h2 { color: var(--text); margin-bottom: 6px; }
+.empty p { max-width: 62ch; margin-left: auto; margin-right: auto; }
+.empty .actions { margin-top: 14px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+.steps { list-style: none; padding: 0; margin: 10px auto 0; max-width: 46ch; text-align: left; font-size: 12px; }
+.steps li { padding: 3px 0 3px 22px; position: relative; color: var(--text-faint); }
+.steps li::before {
+  content: "○"; position: absolute; left: 4px; color: var(--text-faint);
+}
+.steps li.done { color: var(--text-dim); }
+.steps li.done::before { content: "●"; color: var(--pos); }
+.steps li.next { color: var(--text); }
+.steps li.next::before { content: "▸"; color: var(--accent); }
+
+/* ------------------------------------------------------------------ misc */
+.banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 12px; border-radius: var(--radius);
+  background: var(--warn-bg); border: 1px solid var(--warn); color: var(--text);
+}
+.banner.hidden { display: none; }
+
+#drop-overlay {
+  position: fixed; inset: 0; z-index: 50; display: none;
+  align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 3px dashed var(--accent);
+  font-size: 18px; font-weight: 600; color: var(--text);
+  pointer-events: none;
+}
+#drop-overlay.on { display: flex; }
+
+#toast {
+  position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); padding: 8px 14px; font-size: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); opacity: 0; pointer-events: none;
+  transition: opacity .15s ease; z-index: 60; max-width: 60ch;
+}
+#toast.on { opacity: 1; }
+#toast.error { border-color: var(--neg); color: var(--neg); }
+
+.mono-block {
+  font-family: var(--mono); font-size: 11px; white-space: pre-wrap;
+  background: var(--bg-sunk); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px; max-height: 220px; overflow: auto;
+}
+.muted { color: var(--text-dim); }
+.small { font-size: 12px; }
+kbd {
+  font-family: var(--mono); font-size: 11px; border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; background: var(--bg-sunk);
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Household Finances<span class="sub" id="brand-sub"></span></div>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button class="tab" role="tab" data-view="overview"     aria-selected="false">Overview</button>
+    <button class="tab" role="tab" data-view="transactions" aria-selected="false">Transactions</button>
+    <button class="tab" role="tab" data-view="questions"    aria-selected="false">Questions</button>
+    <button class="tab" role="tab" data-view="data"         aria-selected="true">Data file</button>
+  </nav>
+
+  <div class="spacer"></div>
+
+  <div class="filestate" id="filestate" title="Where the data file lives">
+    <span class="dot" id="filestate-dot"></span>
+    <span class="name" id="filestate-text">Starting…</span>
+  </div>
+
+  <button class="btn" id="btn-save" disabled title="Write the data file now (⌘S)">Save</button>
+  <button class="btn" id="btn-theme" title="Light / dark / follow system">◑</button>
+</header>
+
+<main>
+  <!-- ============================================================ OVERVIEW -->
+  <section class="view" id="view-overview" role="tabpanel">
+    <div class="view-head"><h2>Overview</h2><span class="hint" id="overview-period"></span></div>
+    <div id="overview-body"></div>
+  </section>
+
+  <!-- ======================================================== TRANSACTIONS -->
+  <section class="view" id="view-transactions" role="tabpanel">
+    <div class="view-head"><h2>Transactions</h2><span class="hint" id="tx-count-hint"></span></div>
+    <div id="transactions-body"></div>
+  </section>
+
+  <!-- =========================================================== QUESTIONS -->
+  <section class="view" id="view-questions" role="tabpanel">
+    <div class="view-head"><h2>Questions</h2></div>
+    <div id="questions-body"></div>
+  </section>
+
+  <!-- ================================================================ DATA -->
+  <section class="view active" id="view-data" role="tabpanel">
+    <div class="view-head">
+      <h2>Data file</h2>
+      <span class="hint">The single source of truth. It never leaves this folder.</span>
+    </div>
+
+    <div class="banner hidden" id="reconnect-banner">
+      <strong>Reconnect the project folder.</strong>
+      <span class="small">The browser needs your permission again after a restart. Your work is
+        safe — it is cached in this browser until you reconnect.</span>
+      <button class="btn primary" id="btn-reconnect">Reconnect</button>
+    </div>
+
+    <div id="data-body"></div>
+  </section>
+</main>
+
+<footer class="statusbar">
+  <span id="st-file">no data file</span>
+  <span id="st-tx">0 transactions</span>
+  <span id="st-accounts">0 accounts</span>
+  <span id="st-range"></span>
+  <span class="spacer"></span>
+  <span id="st-saved">never saved</span>
+</footer>
+
+<div id="drop-overlay">Drop finances-data.json to load it</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+(function () {
+
+/* ======================================================================== *
+ * 1. Constants and state
+ * ======================================================================== */
+
+const APP_VERSION    = "0.1.0";       // bump when the app changes meaningfully
+const SCHEMA_VERSION = 1;             // bump when the data file shape changes
+
+const DATA_FILE   = "finances-data.json";
+const BACKUP_FILE = "finances-data.backup.json";
+
+const KV_DIR   = "projectDirHandle";  // IndexedDB keys
+const KV_CACHE = "dataCache";
+const KV_THEME = "theme";
+
+/** Everything the running app knows. `data` is the data file, in memory. */
+const state = {
+  data: null,          // parsed finances-data.json, or null
+  dir: null,           // FileSystemDirectoryHandle for the project folder
+  /** 'none' | 'folder' | 'cache' | 'manual'
+   *  folder = connected to disk; cache = browser copy only, needs reconnect;
+   *  manual = loaded by hand, saving means downloading. */
+  mode: "none",
+  dirty: false,        // in-memory changes not yet written to disk
+  lastSaved: null,     // ISO timestamp of the last successful write
+  view: "data",
+};
+
+/* ======================================================================== *
+ * 2. Small utilities
+ * ======================================================================== */
+
+const $  = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k === "html") node.innerHTML = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const child of [].concat(children || [])) {
+    if (child == null) continue;
+    node.append(child.nodeType ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const fmtMoney = (n) => money.format(n || 0);
+
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function plural(n, one, many) {
+  return `${n.toLocaleString()} ${n === 1 ? one : (many || one + "s")}`;
+}
+
+let toastTimer = null;
+function toast(message, isError) {
+  const node = $("#toast");
+  node.textContent = message;
+  node.classList.toggle("error", !!isError);
+  node.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => node.classList.remove("on"), isError ? 6000 : 2600);
+  if (isError) console.error(message);
+}
+
+/* ======================================================================== *
+ * 3. Key/value cache (IndexedDB)
+ *
+ * Holds two things: the directory handle (so a reload doesn't mean re-picking
+ * the folder) and a copy of the data file (so a reload shows data instantly,
+ * and so nothing is lost if the handle's permission has lapsed).
+ * ======================================================================== */
+
+const KV_DB = "household-finances";
+const KV_STORE = "kv";
+let kvPromise = null;
+
+function kvOpen() {
+  if (kvPromise) return kvPromise;
+  kvPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(KV_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(KV_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return kvPromise;
+}
+
+async function kvGet(key) {
+  const db = await kvOpen();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(KV_STORE, "readonly").objectStore(KV_STORE).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function kvSet(key, value) {
+  const db = await kvOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KV_STORE, "readwrite");
+    tx.objectStore(KV_STORE).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function kvDelete(key) {
+  const db = await kvOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KV_STORE, "readwrite");
+    tx.objectStore(KV_STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/* ======================================================================== *
+ * 4. Disk layer (File System Access API)
+ *
+ * We ask for the *project folder*, not the single file, for two reasons:
+ * writing finances-data.backup.json next to the data file needs the folder,
+ * and later imports can offer to read a statements/ subfolder.
+ * ======================================================================== */
+
+const hasFSA = typeof window.showDirectoryPicker === "function";
+
+async function permissionState(handle, mode) {
+  if (!handle || !handle.queryPermission) return "granted"; // older browsers
+  return handle.queryPermission({ mode });
+}
+
+async function requestPermission(handle, mode) {
+  if (!handle || !handle.requestPermission) return true;
+  if (await handle.queryPermission({ mode }) === "granted") return true;
+  return (await handle.requestPermission({ mode })) === "granted";
+}
+
+/** Prompt for the project folder, remember it, and load or create the data file. */
+async function connectFolder() {
+  if (!hasFSA) {
+    toast("This browser can't open a folder. Use Chrome, or load the file by hand below.", true);
+    return;
+  }
+  let dir;
+  try {
+    dir = await window.showDirectoryPicker({ id: "household-finances", mode: "readwrite" });
+  } catch (err) {
+    if (err && err.name === "AbortError") return;   // user cancelled — not an error
+    throw err;
+  }
+  if (!(await requestPermission(dir, "readwrite"))) {
+    toast("Without write permission the app can't save. Nothing was changed.", true);
+    return;
+  }
+
+  state.dir = dir;
+  await kvSet(KV_DIR, dir);
+
+  const onDisk = await readDataFile(dir);
+  if (onDisk) {
+    state.data = onDisk;
+    state.mode = "folder";
+    state.dirty = false;
+    await cacheData();
+    toast(`Loaded ${DATA_FILE} — ${plural(onDisk.transactions.length, "transaction")}.`);
+  } else if (state.data && state.data.transactions.length) {
+    // Folder has no data file yet but we have cached work: write it out.
+    state.mode = "folder";
+    await saveToDisk();
+    toast(`Wrote your cached data to ${DATA_FILE}.`);
+  } else {
+    state.data = newDataFile();
+    state.mode = "folder";
+    await saveToDisk();
+    toast(`Created ${DATA_FILE} in that folder.`);
+  }
+  render();
+}
+
+/** Read and parse finances-data.json from a folder. Returns null if absent. */
+async function readDataFile(dir) {
+  let handle;
+  try {
+    handle = await dir.getFileHandle(DATA_FILE);
+  } catch (err) {
+    if (err && err.name === "NotFoundError") return null;
+    throw err;
+  }
+  const text = await (await handle.getFile()).text();
+  if (!text.trim()) return null;
+  return migrate(JSON.parse(text));
+}
+
+/**
+ * Write the data file, keeping one level of undo.
+ *
+ * Order matters: copy the current file to finances-data.backup.json *before*
+ * overwriting it, so a bad write is always one file-rename away from undone.
+ */
+async function saveToDisk() {
+  if (!state.data) return false;
+  state.data.updated = new Date().toISOString();
+
+  const text = JSON.stringify(state.data, null, 2);
+
+  if (state.mode === "folder" && state.dir) {
+    if (!(await requestPermission(state.dir, "readwrite"))) {
+      throw new Error("Write permission was refused.");
+    }
+    // 1. back up whatever is there now
+    try {
+      const existing = await state.dir.getFileHandle(DATA_FILE);
+      const previous = await (await existing.getFile()).text();
+      if (previous.trim()) await writeFile(state.dir, BACKUP_FILE, previous);
+    } catch (err) {
+      if (!err || err.name !== "NotFoundError") console.warn("Backup skipped:", err);
+    }
+    // 2. write the new version
+    await writeFile(state.dir, DATA_FILE, text);
+    state.dirty = false;
+    state.lastSaved = new Date().toISOString();
+  }
+
+  await cacheData();      // always keep the browser copy fresh
+  render();
+  return true;
+}
+
+async function writeFile(dir, name, text) {
+  const handle = await dir.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(text);
+  await writable.close();
+}
+
+async function cacheData() {
+  if (!state.data) return;
+  await kvSet(KV_CACHE, { savedAt: new Date().toISOString(), data: state.data });
+}
+
+/** Download the data file — the fallback when the folder handle is gone. */
+function exportDataFile() {
+  if (!state.data) { toast("There is no data to export yet.", true); return; }
+  state.data.updated = new Date().toISOString();
+  const blob = new Blob([JSON.stringify(state.data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: DATA_FILE });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`Exported ${DATA_FILE} to your Downloads folder.`);
+}
+
+/** Load a data file the user picked or dropped (no folder handle involved). */
+async function loadDataFromBlob(file) {
+  const text = await file.text();
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    toast(`${file.name} is not valid JSON.`, true);
+    return;
+  }
+  if (!parsed || !Array.isArray(parsed.transactions)) {
+    toast(`${file.name} does not look like a finances data file.`, true);
+    return;
+  }
+  state.data = migrate(parsed);
+  if (state.mode !== "folder") state.mode = "manual";
+  state.dirty = state.mode === "manual";
+  await cacheData();
+  render();
+  toast(`Loaded ${plural(state.data.transactions.length, "transaction")} from ${file.name}.`);
+}
+
+/* ======================================================================== *
+ * 5. Data model
+ *
+ * One normalized transaction list plus the rules that derive everything else.
+ * Raw description is never modified; every derived field is recomputable.
+ *
+ * transaction = {
+ *   id, date, amount, description, account, category, type,
+ *   source_file, notes
+ * }
+ * ======================================================================== */
+
+function newDataFile() {
+  const now = new Date().toISOString();
+  return {
+    schema_version: SCHEMA_VERSION,
+    created: now,
+    updated: now,
+    accounts: [],        // { id, label, institution, kind }
+    categories: [],      // strings — set in build step 4
+    rules: [],           // { match, category, note } — substring → category
+    overrides: {},       // transaction id → { category?, type? }
+    column_maps: {},     // remembered CSV header → field mappings, per source
+    transactions: [],
+  };
+}
+
+/** Bring an older data file up to the current schema. */
+function migrate(data) {
+  const base = newDataFile();
+  const out = Object.assign(base, data);
+  out.schema_version = SCHEMA_VERSION;
+  for (const key of ["accounts", "categories", "rules", "transactions"]) {
+    if (!Array.isArray(out[key])) out[key] = [];
+  }
+  for (const key of ["overrides", "column_maps"]) {
+    if (!out[key] || typeof out[key] !== "object") out[key] = {};
+  }
+  return out;
+}
+
+/* ======================================================================== *
+ * 6. Derived views of the data
+ *
+ * Written generically so they keep working as transactions arrive in later
+ * build steps — nothing here assumes a particular parser or category list.
+ * ======================================================================== */
+
+function summary() {
+  const txs = (state.data && state.data.transactions) || [];
+  const accounts = new Set();
+  let first = null, last = null, uncategorized = 0;
+
+  for (const tx of txs) {
+    if (tx.account) accounts.add(tx.account);
+    if (tx.date) {
+      if (!first || tx.date < first) first = tx.date;
+      if (!last  || tx.date > last)  last  = tx.date;
+    }
+    if (!tx.category || tx.category === "Uncategorized") uncategorized += 1;
+  }
+  return { count: txs.length, accounts: accounts.size, first, last, uncategorized };
+}
+
+/* ======================================================================== *
+ * 7. Rendering
+ * ======================================================================== */
+
+function render() {
+  renderTopBar();
+  renderStatusBar();
+  renderDataView();
+  renderOverview();
+  renderTransactions();
+  renderQuestions();
+}
+
+function renderTopBar() {
+  const dot  = $("#filestate-dot");
+  const text = $("#filestate-text");
+
+  const states = {
+    none:   ["",      "No data file"],
+    folder: ["ok",    DATA_FILE],
+    cache:  ["warn",  "Cached in browser"],
+    manual: ["warn",  "Loaded by hand"],
+  };
+  const [cls, label] = states[state.mode] || states.none;
+  dot.className = "dot " + cls;
+  text.textContent = state.dirty ? label + " • unsaved" : label;
+  $("#filestate").title = {
+    none:   "No data file yet. Connect the project folder on the Data file tab.",
+    folder: `Reading and writing ${DATA_FILE} in your project folder.`,
+    cache:  "Your data is safe in this browser, but not written to disk. Reconnect the folder.",
+    manual: "Loaded from a file you picked. Use Export to write changes back to disk.",
+  }[state.mode];
+
+  $("#btn-save").disabled = !state.data || state.mode === "none";
+  $("#brand-sub").textContent = state.data ? "" : "";
+  $("#reconnect-banner").classList.toggle("hidden", state.mode !== "cache");
+}
+
+function renderStatusBar() {
+  const s = summary();
+  $("#st-file").textContent =
+    state.mode === "folder" ? DATA_FILE
+    : state.mode === "manual" ? "unsaved copy"
+    : state.mode === "cache" ? "browser cache"
+    : "no data file";
+  $("#st-tx").textContent       = plural(s.count, "transaction");
+  $("#st-accounts").textContent = plural(s.accounts, "account");
+  $("#st-range").textContent    = s.first ? `${s.first} → ${s.last}` : "";
+  $("#st-saved").textContent    = state.lastSaved
+    ? "saved " + fmtDateTime(state.lastSaved)
+    : (state.mode === "none" ? "never saved" : "not yet saved this session");
+}
+
+/** The empty state every view shows until there are transactions to show. */
+function emptyState(title, body, showConnect) {
+  const actions = el("div", { class: "actions" });
+  if (showConnect && state.mode === "none") {
+    actions.append(el("button", {
+      class: "btn primary", onclick: () => run(connectFolder),
+    }, "Connect project folder"));
+  }
+  actions.append(el("button", {
+    class: "btn", onclick: () => switchView("data"),
+  }, "Go to the Data file tab"));
+
+  return el("div", { class: "empty" }, [
+    el("h2", { text: title }),
+    el("p", { class: "small", text: body }),
+    buildSteps(),
+    actions,
+  ]);
+}
+
+/** A visible record of where we are in the agreed build order. */
+function buildSteps() {
+  const steps = [
+    "Shell, launcher, data file load/save",
+    "CSV import for one account, with dedup",
+    "Transaction table with filters",
+    "Categorization rules and overrides",
+    "Transfer and refund handling",
+    "Overview dashboard with drill-down",
+    "Preset questions",
+    "Optional natural-language layer",
+  ];
+  const doneThrough = 1;  // update as each slice lands
+  return el("ul", { class: "steps" }, steps.map((label, i) => el("li", {
+    class: i < doneThrough ? "done" : i === doneThrough ? "next" : "",
+    text: `${i + 1}. ${label}`,
+  })));
+}
+
+function renderOverview() {
+  const s = summary();
+  const body = $("#overview-body");
+  body.textContent = "";
+  $("#overview-period").textContent = s.first ? `${s.first} → ${s.last}` : "";
+
+  if (!s.count) {
+    body.append(emptyState(
+      "Nothing imported yet",
+      "The overview fills in once there are transactions. Next up is the first CSV parser — " +
+      "tell me which account to start with and drop me a sample export.",
+      true,
+    ));
+  }
+}
+
+function renderTransactions() {
+  const s = summary();
+  const body = $("#transactions-body");
+  body.textContent = "";
+  $("#tx-count-hint").textContent = s.count ? plural(s.count, "row") : "";
+
+  if (!s.count) {
+    body.append(emptyState(
+      "No transactions yet",
+      "Import a statement and every row lands here, filterable and sortable, with the raw " +
+      "description kept exactly as the bank wrote it.",
+      true,
+    ));
+  }
+}
+
+function renderQuestions() {
+  const body = $("#questions-body");
+  body.textContent = "";
+  body.append(emptyState(
+    "Questions need data first",
+    "Once transactions are in, this is where you ask things like “how much do we spend on " +
+    "gas in a month?” — answered from the data on this machine, with the matching " +
+    "transactions and the exact filter shown underneath.",
+    true,
+  ));
+}
+
+function renderDataView() {
+  const body = $("#data-body");
+  body.textContent = "";
+  const s = summary();
+
+  /* --- not connected to anything yet ------------------------------------ */
+  if (state.mode === "none") {
+    body.append(el("div", { class: "empty" }, [
+      el("h2", { text: "Connect your project folder" }),
+      el("p", { class: "small" }, [
+        "Pick the folder this page is served from. The app will read ",
+        el("code", { text: DATA_FILE }),
+        " if it is there, or create it if it isn't. Everything stays in that folder — " +
+        "nothing is uploaded anywhere.",
+      ]),
+      buildSteps(),
+      el("div", { class: "actions" }, [
+        hasFSA
+          ? el("button", { class: "btn primary", onclick: () => run(connectFolder) },
+              "Connect project folder")
+          : null,
+        el("button", { class: "btn", onclick: pickDataFile }, "Load a data file instead…"),
+      ]),
+      hasFSA ? null : el("p", { class: "small muted", style: "margin-top:12px" },
+        "This browser doesn't support opening a folder. Chrome does — in anything else you can " +
+        "still load a data file by hand and use Export to save changes."),
+    ]));
+    return;
+  }
+
+  /* --- connected: show what we have ------------------------------------- */
+  const cols = el("div", { class: "cols" });
+
+  const where = {
+    folder: "Read and written directly in your project folder.",
+    cache:  "Held in this browser only. Reconnect the folder to write it to disk.",
+    manual: "Loaded from a file you picked. Use Export to write it back to disk.",
+  }[state.mode];
+
+  cols.append(el("div", { class: "panel" }, [
+    el("h3", { text: "Where the data lives" }),
+    el("p", { class: "small muted", text: where }),
+    el("dl", { class: "facts" }, [
+      el("dt", { text: "Data file" }),    el("dd", { text: DATA_FILE }),
+      el("dt", { text: "Backup" }),       el("dd", { text: BACKUP_FILE }),
+      el("dt", { text: "Folder" }),       el("dd", { text: state.dir ? state.dir.name : "—" }),
+      el("dt", { text: "Schema" }),       el("dd", { text: "v" + (state.data.schema_version || 1) }),
+      el("dt", { text: "Created" }),      el("dd", { text: fmtDateTime(state.data.created) }),
+      el("dt", { text: "Last written" }), el("dd", { text: fmtDateTime(state.data.updated) }),
+    ]),
+    el("div", { class: "row", style: "margin-top:10px" }, [
+      el("button", { class: "btn primary", onclick: () => run(saveNow) }, "Save now"),
+      el("button", { class: "btn", onclick: exportDataFile }, "Export data file"),
+      el("button", { class: "btn", onclick: pickDataFile }, "Load a data file…"),
+      state.mode !== "folder" && hasFSA
+        ? el("button", { class: "btn", onclick: () => run(connectFolder) }, "Connect folder")
+        : null,
+    ]),
+  ]));
+
+  cols.append(el("div", { class: "panel" }, [
+    el("h3", { text: "What's in it" }),
+    el("dl", { class: "facts" }, [
+      el("dt", { text: "Transactions" }),   el("dd", { text: s.count.toLocaleString() }),
+      el("dt", { text: "Date range" }),     el("dd", { text: s.first ? `${s.first} → ${s.last}` : "—" }),
+      el("dt", { text: "Accounts" }),       el("dd", { text: String(state.data.accounts.length || s.accounts) }),
+      el("dt", { text: "Categories" }),     el("dd", { text: state.data.categories.length
+                                              ? String(state.data.categories.length)
+                                              : "not set yet" }),
+      el("dt", { text: "Rules" }),          el("dd", { text: String(state.data.rules.length) }),
+      el("dt", { text: "Manual overrides" }), el("dd", { text: String(Object.keys(state.data.overrides).length) }),
+      el("dt", { text: "Uncategorized" }),  el("dd", { text: String(s.uncategorized) }),
+    ]),
+    el("p", { class: "small muted", style: "margin-top:10px",
+      text: "Categories and rules get filled in at build step 4. Nothing is guessed for you." }),
+  ]));
+
+  body.append(cols);
+
+  body.append(el("div", { class: "panel" }, [
+    el("h3", { text: "How this runs" }),
+    el("p", { class: "small muted" }, [
+      "Served by ", el("code", { text: "start.command" }), " on ",
+      el("code", { text: location.origin }), ". No account, no server, no network calls. ",
+      el("kbd", { text: "⌘S" }), " saves.",
+    ]),
+    el("p", { class: "small muted", text:
+      "Every write copies the old data file to " + BACKUP_FILE + " first, so the previous " +
+      "version is always one rename away." }),
+  ]));
+
+  body.append(el("details", { class: "panel" }, [
+    el("summary", { class: "small muted", text: "Raw data file (first 4 KB)" }),
+    el("div", { class: "mono-block", style: "margin-top:8px",
+      text: JSON.stringify(state.data, null, 2).slice(0, 4096) }),
+  ]));
+}
+
+/* ======================================================================== *
+ * 8. Wiring
+ * ======================================================================== */
+
+/** Run an async action, turning a thrown error into a visible message. */
+async function run(fn) {
+  try {
+    await fn();
+  } catch (err) {
+    toast((err && err.message) || String(err), true);
+  }
+}
+
+async function saveNow() {
+  if (!state.data) { toast("Nothing to save yet.", true); return; }
+  if (state.mode === "folder") {
+    await saveToDisk();
+    toast("Saved.");
+  } else {
+    await cacheData();
+    render();
+    toast("Cached in this browser. Connect the folder or use Export to write it to disk.");
+  }
+}
+
+function pickDataFile() {
+  const input = el("input", { type: "file", accept: ".json,application/json" });
+  input.addEventListener("change", () => {
+    if (input.files && input.files[0]) run(() => loadDataFromBlob(input.files[0]));
+  });
+  input.click();
+}
+
+function switchView(name) {
+  state.view = name;
+  $$(".tab").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.view === name)));
+  $$(".view").forEach((view) => view.classList.toggle("active", view.id === "view-" + name));
+}
+
+function setTheme(theme) {
+  if (theme === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", theme);
+  $("#btn-theme").title = "Theme: " + theme;
+  kvSet(KV_THEME, theme).catch(() => {});
+}
+
+function wireEvents() {
+  $$(".tab").forEach((tab) => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+  $("#btn-save").addEventListener("click", () => run(saveNow));
+  $("#btn-reconnect").addEventListener("click", () => run(reconnect));
+
+  const cycle = ["auto", "light", "dark"];
+  $("#btn-theme").addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme") || "auto";
+    setTheme(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
+  });
+
+  document.addEventListener("keydown", (ev) => {
+    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "s") {
+      ev.preventDefault();
+      run(saveNow);
+    }
+  });
+
+  // Warn before losing in-memory changes that never made it to disk.
+  window.addEventListener("beforeunload", (ev) => {
+    if (state.dirty && state.mode !== "folder") { ev.preventDefault(); ev.returnValue = ""; }
+  });
+
+  wireDragAndDrop();
+}
+
+/**
+ * Drag and drop. Today it accepts the data file; statement files get handled
+ * here too once the importers land in build step 2.
+ */
+function wireDragAndDrop() {
+  const overlay = $("#drop-overlay");
+  let depth = 0;
+
+  window.addEventListener("dragenter", (ev) => {
+    ev.preventDefault();
+    if (++depth === 1) overlay.classList.add("on");
+  });
+  window.addEventListener("dragover", (ev) => ev.preventDefault());
+  window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; overlay.classList.remove("on"); } });
+  window.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    depth = 0;
+    overlay.classList.remove("on");
+
+    const files = Array.from(ev.dataTransfer.files || []);
+    if (!files.length) return;
+
+    const json = files.find((f) => f.name.toLowerCase().endsWith(".json"));
+    if (json) { run(() => loadDataFromBlob(json)); return; }
+
+    toast("Statement importing arrives in build step 2 — for now, only " + DATA_FILE + " loads.", true);
+  });
+}
+
+/** Re-ask for permission on the remembered folder (needs a user gesture). */
+async function reconnect() {
+  if (!state.dir) { await connectFolder(); return; }
+  if (!(await requestPermission(state.dir, "readwrite"))) {
+    toast("Permission was refused. Your data is still cached in this browser.", true);
+    return;
+  }
+  const onDisk = await readDataFile(state.dir);
+  const cachedIsNewer = state.data && onDisk && state.data.updated > onDisk.updated;
+
+  if (onDisk && !cachedIsNewer) {
+    state.data = onDisk;   // disk wins unless our cached copy is newer
+    state.dirty = false;
+  }
+  state.mode = "folder";
+  if (cachedIsNewer || !onDisk) await saveToDisk();
+  await cacheData();
+  render();
+  toast("Reconnected to " + state.dir.name + ".");
+}
+
+/**
+ * Start up:
+ *   1. restore the theme,
+ *   2. show the cached copy immediately so a reload is never a blank page,
+ *   3. quietly re-attach the folder handle if permission is still granted.
+ */
+async function start() {
+  wireEvents();
+
+  try { setTheme((await kvGet(KV_THEME)) || "auto"); } catch { setTheme("auto"); }
+
+  try {
+    const cached = await kvGet(KV_CACHE);
+    if (cached && cached.data) {
+      state.data = migrate(cached.data);
+      state.mode = "cache";
+      state.lastSaved = cached.savedAt;
+    }
+  } catch (err) {
+    console.warn("Could not read the browser cache:", err);
+  }
+
+  try {
+    const dir = await kvGet(KV_DIR);
+    if (dir) {
+      state.dir = dir;
+      if (await permissionState(dir, "readwrite") === "granted") {
+        const onDisk = await readDataFile(dir);
+        if (onDisk) { state.data = onDisk; state.dirty = false; }
+        else if (!state.data) state.data = newDataFile();
+        state.mode = "folder";
+      }
+      // else: stay in 'cache' mode — the reconnect banner asks for a click.
+    }
+  } catch (err) {
+    console.warn("Could not re-attach the project folder:", err);
+  }
+
+  if (state.data && state.mode === "folder") switchView("overview");
+  render();
+
+  if (location.protocol === "file:") {
+    toast("Opened from file:// — storage won't stick. Launch with start.command instead.", true);
+  }
+}
+
+/**
+ * Testing seam. tests/tests.html loads this page with ?test=1, which skips
+ * start() — no IndexedDB, no folder handle, nothing touched — and exposes the
+ * pure data functions so they can be asserted against. Parsers get added here
+ * as they land, so the test page can exercise each one in isolation.
+ */
+window.__finance = {
+  SCHEMA_VERSION,
+  newDataFile,
+  migrate,
+  summary,
+  state,
+};
+
+if (new URLSearchParams(location.search).has("test")) {
+  document.documentElement.dataset.testMode = "1";
+} else {
+  start();
+}
+
+})();
+</script>
+</body>
+</html>
