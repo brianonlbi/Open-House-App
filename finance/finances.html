@@ -254,7 +254,10 @@ table.tbl th {
 }
 table.tbl td { padding: 3px 8px; border-bottom: 1px solid var(--border); }
 table.tbl td.num { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-table.tbl td.desc { font-family: var(--mono); font-size: 11px; }
+table.tbl td.desc {
+  font-family: var(--mono); font-size: 11px;
+  max-width: 620px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 table.tbl td.date { font-family: var(--mono); white-space: nowrap; }
 table.tbl tbody tr:hover td { background: var(--bg-hover); }
 .neg { color: var(--neg); }
@@ -268,6 +271,36 @@ table.tbl tbody tr:hover td { background: var(--bg-hover); }
 }
 .tag.transfer { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 .tag.refund   { color: var(--pos); border-color: var(--pos); }
+
+/* ------------------------------------------------------- account strip */
+.acct-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.acct {
+  appearance: none; font: inherit; color: inherit; cursor: pointer; text-align: left;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-raised); padding: 7px 12px; min-width: 148px;
+}
+.acct:hover { background: var(--bg-hover); }
+.acct[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
+.acct .label { font-weight: 600; font-size: 12px; margin-bottom: 2px; }
+.acct .big { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+.acct .sub { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+
+/* ------------------------------------------------------------- filters */
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.filters label { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
+.filters select, .filters input {
+  font: inherit; font-size: 12px; padding: 2px 6px; color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg);
+}
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+th .arrow { opacity: .6; font-size: 9px; }
+
+.summary-line {
+  display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px;
+  padding: 7px 2px; border-top: 1px solid var(--border); margin-top: 4px;
+}
+.summary-line b { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .note {
   padding: 8px 10px; border-radius: var(--radius); font-size: 12px;
@@ -392,6 +425,9 @@ const state = {
   view: "data",
   pendingImport: null, // a parsed file staged for review, not yet committed
   lastImport: null,    // { read, imported, duplicates, problems } of the last commit
+  filters: { account: "", category: "", type: "", from: "", to: "", q: "", raw: false },
+  sort: { key: "date", dir: "desc" },
+  rowLimit: 500,       // rendered rows before "show all"; keeps a big file responsive
 };
 
 /* ======================================================================== *
@@ -787,32 +823,43 @@ function assignIds(rows) {
 
 /* --------------------------------------------------------------- parsers */
 
-const PARSERS = {
-  /**
-   * Chase credit card activity export.
-   * Header: Transaction Date,Post Date,Description,Category,Type,Amount,Memo
-   *
-   * Chase already signs money out as negative, matching our convention, so no
-   * flip is needed — but the parser verifies that rather than assuming it.
-   */
-  chase_card: {
-    label: "Chase credit card",
-    institution: "Chase",
-    kind: "credit_card",
-    columns: ["Transaction Date", "Post Date", "Description", "Category", "Type", "Amount", "Memo"],
-    required: ["Transaction Date", "Post Date", "Description", "Type", "Amount"],
+/**
+ * Build a CSV parser from a declaration.
+ *
+ * Adding an institution should mean describing its export, not writing another
+ * parse loop — every format then shares one tested code path. A declaration
+ * says which columns carry which field, how the issuer signs money out, and
+ * which of its own row types mean "transfer", "refund" or "fee".
+ */
+function makeCsvParser(spec) {
+  return {
+    label: spec.label,
+    institution: spec.institution,
+    kind: spec.kind || "credit_card",
+    required: spec.required,
+    map: spec.map,
 
-    /** Chase's Type column says what a row *is*, which is better than guessing.
-     *  A card Payment is money arriving from another account of ours: internal
-     *  movement, never spending. Returns stay expenses so a refund nets against
-     *  its category instead of appearing as income. */
-    typeFor(issuerType) {
-      return issuerType === "Payment" ? "transfer" : "expense";
-    },
+    /** "negative": the issuer already signs money out negative (Chase).
+     *  "positive": the issuer signs purchases positive, so we invert (Apple). */
+    moneyOut: spec.moneyOut || "negative",
+
+    transferTypes: spec.transferTypes || [],
+    refundTypes: spec.refundTypes || [],
+    feeTypes: spec.feeTypes || [],
 
     matches(header) {
-      const set = new Set(header.map((h) => h.trim()));
-      return this.required.every((c) => set.has(c));
+      const present = new Set(header.map((h) => h.trim()));
+      return this.required.every((column) => present.has(column));
+    },
+
+    /** Interest and fees are real expenses, but they are not merchant spending,
+     *  so they get their own category rather than landing in a merchant bucket. */
+    isFee(issuerType) { return this.feeTypes.includes(issuerType); },
+    isRefund(issuerType) { return this.refundTypes.includes(issuerType); },
+
+    /** The issuer states outright what a row is; that beats guessing. */
+    typeFor(issuerType) {
+      return this.transferTypes.includes(issuerType) ? "transfer" : "expense";
     },
 
     parse(text, filename, accountId) {
@@ -824,53 +871,173 @@ const PARSERS = {
         throw new Error("Missing column(s): " +
           this.required.filter((c) => !header.includes(c)).join(", "));
       }
+
       const at = {};
-      this.columns.forEach((c) => { at[c] = header.indexOf(c); });
+      for (const [field, column] of Object.entries(this.map)) at[field] = header.indexOf(column);
 
       const transactions = [], problems = [];
 
       rows.slice(1).forEach((row, i) => {
-        const cell = (name) => (at[name] === -1 ? "" : (row[at[name]] ?? ""));
+        const get = (field) =>
+          (at[field] === undefined || at[field] === -1 ? "" : (row[at[field]] ?? ""));
 
-        const date = toISODate(cell("Transaction Date"));
-        const amount = Number(String(cell("Amount")).replace(/[$,\s]/g, ""));
+        const date = toISODate(get("date"));
+        let amount = Number(String(get("amount")).replace(/[$,\s]/g, ""));
 
         if (!date || !Number.isFinite(amount)) {
           problems.push({ line: i + 2, text: row.join(","),
                           why: !date ? "unreadable date" : "unreadable amount" });
           return;
         }
-        const issuerType = cell("Type").trim();
+        if (this.moneyOut === "positive") amount = -amount;
+
+        const issuerType = get("issuer_type").trim();
 
         transactions.push({
           id: "",
           date,
-          post_date: toISODate(cell("Post Date")) || date,
+          post_date: toISODate(get("post_date")) || date,
           amount,
-          description: cell("Description"),   // verbatim. never trimmed, cased or cleaned.
+          description: get("description"),   // verbatim. never trimmed, cased or cleaned.
+          merchant: get("merchant").trim(),  // issuer's clean name, when it provides one
           account: accountId,
-          category: "",                       // assigned by rules, build step 4
+          category: "",                      // filled by resolveCategory
           type: this.typeFor(issuerType),
           source_file: filename,
-          notes: cell("Memo").trim(),
-          issuer_category: cell("Category").trim(),  // Chase's own guess. kept, not trusted.
+          source_parser: "",                 // stamped by beginImport
+          notes: get("notes").trim(),
+          purchased_by: get("purchased_by").trim(),
+          issuer_category: get("issuer_category").trim(),  // the issuer's guess. kept, not trusted.
           issuer_type: issuerType,
         });
       });
 
-      // Verify the sign convention instead of assuming it. If this export reports
-      // purchases as positive, flip the whole file rather than importing inverted.
+      // Verify the sign convention rather than trusting the declaration. Rows that
+      // are plain purchases — not transfers, refunds or fees — must end up negative.
+      // Importing a year of expenses backwards would otherwise be completely silent.
       let flipped = false;
-      const sales = transactions.filter((t) => t.issuer_type === "Sale");
-      if (sales.length >= 5 && sales.filter((t) => t.amount > 0).length / sales.length > 0.8) {
+      const purchases = transactions.filter((t) =>
+        !this.transferTypes.includes(t.issuer_type) &&
+        !this.refundTypes.includes(t.issuer_type) &&
+        !this.feeTypes.includes(t.issuer_type));
+
+      if (purchases.length >= 5 &&
+          purchases.filter((t) => t.amount > 0).length / purchases.length > 0.8) {
         transactions.forEach((t) => { t.amount = -t.amount; });
         flipped = true;
       }
 
       return { transactions, problems, flipped };
     },
-  },
+  };
+}
+
+const PARSERS = {
+  /**
+   * Chase credit card activity export.
+   * Transaction Date,Post Date,Description,Category,Type,Amount,Memo
+   * Chase signs money out negative, matching our convention.
+   */
+  chase_card: makeCsvParser({
+    label: "Chase credit card",
+    institution: "Chase",
+    required: ["Transaction Date", "Post Date", "Description", "Type", "Amount"],
+    map: {
+      date: "Transaction Date", post_date: "Post Date", description: "Description",
+      amount: "Amount", issuer_type: "Type", issuer_category: "Category", notes: "Memo",
+    },
+    moneyOut: "negative",
+    transferTypes: ["Payment"],
+    refundTypes: ["Return"],
+    feeTypes: ["Fee"],
+  }),
+
+  /**
+   * Apple Card transaction export.
+   * Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By
+   *
+   * Apple signs the opposite way from Chase — purchases positive, payments
+   * negative — so every amount is inverted on the way in. It also ships a clean
+   * `Merchant` column alongside a Description that carries the full street
+   * address, and a `Purchased By` column that matters once a card is shared.
+   * Its own row types include Debit and Credit, which appear as a pair when a
+   * charge is disputed and reversed.
+   */
+  apple_card: makeCsvParser({
+    label: "Apple Card",
+    institution: "Apple Card",
+    required: ["Transaction Date", "Clearing Date", "Description", "Merchant", "Type", "Amount (USD)"],
+    map: {
+      date: "Transaction Date", post_date: "Clearing Date", description: "Description",
+      merchant: "Merchant", amount: "Amount (USD)", issuer_type: "Type",
+      issuer_category: "Category", purchased_by: "Purchased By",
+    },
+    moneyOut: "positive",
+    transferTypes: ["Payment"],
+    refundTypes: ["Credit"],
+    feeTypes: ["Interest"],
+  }),
 };
+
+/* ---------------------------------------------------------- categorizing */
+
+const UNCATEGORIZED = "Uncategorized";
+const FEES_CATEGORY = "Interest & Fees";
+const TRANSFER_CATEGORY = "Transfer";
+
+/** Case-insensitive substring match against the raw description and, when the
+ *  issuer supplies one, the clean merchant name. */
+function ruleMatches(rule, tx) {
+  const needle = String(rule.match || "").trim().toUpperCase();
+  if (!needle) return false;
+  return String(tx.description || "").toUpperCase().includes(needle) ||
+         String(tx.merchant || "").toUpperCase().includes(needle);
+}
+
+/**
+ * Work out a transaction's category. Deterministic, and in this order:
+ *
+ *   1. a manual override for this exact transaction
+ *   2. the first matching rule
+ *   3. the issuer saying this row is interest or a fee
+ *   4. the issuer saying this row is internal movement
+ *   5. Uncategorized
+ *
+ * Nothing here looks at the issuer's own category guess. That column is kept as
+ * `issuer_category` for reference only — issuers categorise the same merchant
+ * inconsistently, which would make the same question return different answers.
+ */
+function resolveCategory(tx, data) {
+  const override = data.overrides[tx.id];
+  if (override && override.category) return override.category;
+
+  for (const rule of data.rules) {
+    if (ruleMatches(rule, tx)) return rule.category;
+  }
+
+  const parser = PARSERS[tx.source_parser];
+  if (parser && parser.isFee(tx.issuer_type)) return FEES_CATEGORY;
+
+  if (tx.type === "transfer") return TRANSFER_CATEGORY;
+
+  return UNCATEGORIZED;
+}
+
+/**
+ * Re-derive every category from the raw data. Called after an import and after
+ * any rule change, so editing one rule updates the whole history — categories
+ * are never the only copy of a decision.
+ */
+function recategorizeAll(data) {
+  for (const tx of data.transactions) tx.category = resolveCategory(tx, data);
+
+  // Keep the category list in step with what is actually in use.
+  const used = new Set(data.transactions.map((t) => t.category));
+  for (const name of [FEES_CATEGORY, TRANSFER_CATEGORY]) {
+    if (used.has(name) && !data.categories.includes(name)) data.categories.push(name);
+  }
+  return data;
+}
 
 /** Pick the parser that recognises this file's header row. */
 function detectParser(text) {
@@ -883,17 +1050,26 @@ function detectParser(text) {
   return { id: null, parser: null, header };
 }
 
+/** Turn a label into a stable, unique account id. */
+function accountIdFrom(label, taken) {
+  const base = String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "account";
+  let id = base, n = 2;
+  while (taken.includes(id)) id = `${base}-${n++}`;
+  return id;
+}
+
 /**
- * Work out which account a file belongs to from its name.
- * Chase names exports like `Chase1234_Activity_20260916.csv`.
+ * Work out which account a file belongs to from its name, falling back to the
+ * parser's institution. Chase names exports like `Chase1234_Activity_*.csv`;
+ * Apple names them `Apple_Card_Transactions_*.csv`.
  */
 function inferAccount(filename, parser) {
   const m = filename.match(/^([A-Za-z][A-Za-z ]*?)[\s_-]*(\d{4})[\s_-]*Activity/i);
   const institution = m ? m[1] : (parser ? parser.institution : "Account");
   const last4 = m ? m[2] : null;
   return {
-    id: (institution + (last4 ? "-" + last4 : "")).toLowerCase().replace(/[^a-z0-9-]+/g, "-"),
-    label: institution + (last4 ? " \u2026" + last4 : ""),
+    id: (institution + (last4 ? "-" + last4 : "")).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    label: institution + (last4 ? " …" + last4 : ""),
     institution,
     kind: parser ? parser.kind : "unknown",
   };
@@ -908,56 +1084,90 @@ async function beginImport(file) {
     throw new Error(
       `I don't recognise the columns in ${file.name}` +
       (found && found.header ? ` (${found.header.slice(0, 6).join(", ")})` : "") +
-      ". Column mapping for unknown exports is build step 2b.");
+      ". Mapping columns for an unknown export is the next thing to build.");
   }
 
   const account = inferAccount(file.name, found.parser);
   const result = found.parser.parse(text, file.name, account.id);
+  result.transactions.forEach((t) => { t.source_parser = found.id; });
   assignIds(result.transactions);
 
   if (!result.transactions.length) throw new Error(`No readable rows in ${file.name}.`);
 
-  const existing = new Set((state.data ? state.data.transactions : []).map((t) => t.id));
-  const fresh = result.transactions.filter((t) => !existing.has(t.id));
+  const accounts = (state.data ? state.data.accounts : []) || [];
+  const existing = accounts.find((a) => a.id === account.id);
 
   state.pendingImport = {
     filename: file.name,
     parserId: found.id,
     parserLabel: found.parser.label,
+    parser: found.parser,
     account,
+    // Which account these rows land in: an existing id, or "" meaning make a new
+    // one. An inferred account that does not exist yet is still a new account —
+    // anything else leaves the picker reading "New account…" with no way to name
+    // it while quietly targeting something else.
+    targetId: existing ? existing.id : "",
+    targetLabel: account.label,
     rows: result.transactions,
-    fresh,
-    duplicates: result.transactions.length - fresh.length,
     problems: result.problems,
     flipped: result.flipped,
   };
+  restageImport();
   switchView("data");
   render();
 }
 
+/**
+ * Re-point the staged rows at the chosen account and recount duplicates.
+ * The account is part of the dedup hash, so changing it changes every id.
+ */
+function restageImport() {
+  const imp = state.pendingImport;
+  if (!imp) return;
+
+  const accounts = (state.data ? state.data.accounts : []) || [];
+  const chosen = accounts.find((a) => a.id === imp.targetId);
+  const targetId = chosen ? chosen.id
+                          : accountIdFrom(imp.targetLabel, accounts.map((a) => a.id));
+
+  imp.resolvedId = targetId;
+  imp.rows.forEach((t) => { t.account = targetId; });
+  assignIds(imp.rows);
+
+  const present = new Set((state.data ? state.data.transactions : []).map((t) => t.id));
+  imp.fresh = imp.rows.filter((t) => !present.has(t.id));
+  imp.duplicates = imp.rows.length - imp.fresh.length;
+}
+
 /** Commit the staged import into the data file. */
 async function commitImport() {
-  const pending = state.pendingImport;
-  if (!pending) return;
-
+  const imp = state.pendingImport;
+  if (!imp) return;
   if (!state.data) state.data = newDataFile();
 
-  // Register the account the first time we see it.
-  const label = ($("#import-account-label") || {}).value || pending.account.label;
-  if (!state.data.accounts.some((a) => a.id === pending.account.id)) {
-    state.data.accounts.push({ ...pending.account, label: label.trim() || pending.account.label });
+  restageImport();
+
+  if (!state.data.accounts.some((a) => a.id === imp.resolvedId)) {
+    state.data.accounts.push({
+      id: imp.resolvedId,
+      label: (imp.targetLabel || "").trim() || imp.account.label,
+      institution: imp.account.institution,
+      kind: imp.account.kind,
+    });
   }
 
-  state.data.transactions.push(...pending.fresh);
+  state.data.transactions.push(...imp.fresh);
   state.data.transactions.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  recategorizeAll(state.data);
 
   state.lastImport = {
-    filename: pending.filename,
-    account: pending.account.id,
-    read: pending.rows.length + pending.problems.length,
-    imported: pending.fresh.length,
-    duplicates: pending.duplicates,
-    problems: pending.problems.length,
+    filename: imp.filename,
+    account: imp.resolvedId,
+    read: imp.rows.length + imp.problems.length,
+    imported: imp.fresh.length,
+    duplicates: imp.duplicates,
+    problems: imp.problems.length,
     at: new Date().toISOString(),
   };
   state.pendingImport = null;
@@ -978,7 +1188,7 @@ function cancelImport() {
   render();
 }
 
-/** Summarise a set of rows by transaction type, for the import preview. */
+/** Summarise a set of rows by the issuer's own type, for the import preview. */
 function typeBreakdown(rows) {
   const counts = new Map();
   for (const tx of rows) {
@@ -1100,7 +1310,7 @@ function buildSteps() {
     "Preset questions",
     "Optional natural-language layer",
   ];
-  const doneThrough = 2;  // update as each slice lands
+  const doneThrough = 3;  // update as each slice lands
   return el("ul", { class: "steps" }, steps.map((label, i) => el("li", {
     class: i < doneThrough ? "done" : i === doneThrough ? "next" : "",
     text: `${i + 1}. ${label}`,
@@ -1123,19 +1333,235 @@ function renderOverview() {
   }
 }
 
+/* ------------------------------------------------------- transaction view */
+
+const accountLabel = (id) => {
+  const account = (state.data ? state.data.accounts : []).find((a) => a.id === id);
+  return account ? account.label : id;
+};
+
+/** Everything matching the current filters. */
+function filteredTransactions() {
+  const f = state.filters;
+  const needle = f.q.trim().toUpperCase();
+  return (state.data ? state.data.transactions : []).filter((tx) => {
+    if (f.account && tx.account !== f.account) return false;
+    if (f.category && tx.category !== f.category) return false;
+    if (f.type && tx.type !== f.type) return false;
+    if (f.from && tx.date < f.from) return false;
+    if (f.to && tx.date > f.to) return false;
+    if (needle) {
+      const hay = [tx.description, tx.merchant, tx.notes, tx.issuer_category].join(" ").toUpperCase();
+      if (!hay.includes(needle)) return false;
+    }
+    return true;
+  });
+}
+
+function sortTransactions(rows) {
+  const { key, dir } = state.sort;
+  const sign = dir === "asc" ? 1 : -1;
+  const valueOf = (tx) =>
+    key === "amount" ? tx.amount
+    : key === "description" ? (tx.merchant || tx.description).toUpperCase()
+    : key === "account" ? accountLabel(tx.account).toUpperCase()
+    : String(tx[key] || "");
+
+  return [...rows].sort((a, b) => {
+    const av = valueOf(a), bv = valueOf(b);
+    if (av < bv) return -sign;
+    if (av > bv) return sign;
+    return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+  });
+}
+
+/**
+ * Totals for a set of rows.
+ *
+ * `spend` excludes transfers — always. Refunds are inside it as positive
+ * amounts, so they net against what was spent rather than counting as income.
+ */
+function totalsFor(rows) {
+  let spend = 0, transfers = 0, refunds = 0, fees = 0;
+  for (const tx of rows) {
+    if (tx.type === "transfer") { transfers += tx.amount; continue; }
+    spend += tx.amount;
+    if (tx.amount > 0) refunds += tx.amount;
+    if (tx.category === FEES_CATEGORY) fees += tx.amount;
+  }
+  // Summing floats over hundreds of rows drifts; round to cents so a total that
+  // should be zero reads as zero rather than -0.000000001.
+  const cents = (n) => Math.round(n * 100) / 100;
+  return { count: rows.length, spend: cents(spend), transfers: cents(transfers),
+           refunds: cents(refunds), fees: cents(fees) };
+}
+
+/** One card per account, so each card's own activity is visible at a glance. */
+function renderAccountStrip() {
+  const strip = el("div", { class: "acct-strip" });
+  const all = (state.data ? state.data.transactions : []);
+  const accounts = (state.data ? state.data.accounts : []) || [];
+
+  const card = (id, label, rows) => {
+    const t = totalsFor(rows);
+    const dates = rows.map((r) => r.date).sort();
+    return el("button", {
+      class: "acct",
+      "aria-pressed": String(state.filters.account === id),
+      onclick: () => { state.filters.account = id; renderTransactions(); },
+      title: dates.length ? `${dates[0]} → ${dates[dates.length - 1]}` : "",
+    }, [
+      el("div", { class: "label", text: label }),
+      el("div", { class: "big " + (t.spend < 0 ? "neg" : ""), text: fmtMoney(t.spend) }),
+      el("div", { class: "sub", text:
+        `${t.count.toLocaleString()} rows` +
+        (t.transfers ? ` · ${fmtMoney(t.transfers)} paid` : "") }),
+    ]);
+  };
+
+  strip.append(card("", "All accounts", all));
+  for (const account of accounts) {
+    strip.append(card(account.id, account.label, all.filter((t) => t.account === account.id)));
+  }
+  return strip;
+}
+
+function renderFilters(rows) {
+  const f = state.filters;
+  const data = state.data;
+  const bar = el("div", { class: "filters" });
+
+  const set = (key) => (ev) => { f[key] = ev.target.value; renderTransactions(); };
+
+  bar.append(el("label", { text: "From" }));
+  bar.append(el("input", { type: "date", value: f.from, onchange: set("from") }));
+  bar.append(el("label", { text: "To" }));
+  bar.append(el("input", { type: "date", value: f.to, onchange: set("to") }));
+
+  const categories = [...new Set(data.transactions.map((t) => t.category).filter(Boolean))].sort();
+  const catSelect = el("select", { onchange: set("category") },
+    [el("option", { value: "", selected: !f.category, text: "All categories" })]
+      .concat(categories.map((c) => el("option", { value: c, selected: f.category === c, text: c }))));
+  bar.append(el("label", { text: "Category" }), catSelect);
+
+  const typeSelect = el("select", { onchange: set("type") },
+    [["", "All types"], ["expense", "Expenses"], ["income", "Income"], ["transfer", "Transfers"]]
+      .map(([v, t]) => el("option", { value: v, selected: f.type === v, text: t })));
+  bar.append(el("label", { text: "Type" }), typeSelect);
+
+  bar.append(el("input", {
+    type: "search", placeholder: "Search description…", value: f.q, size: "22",
+    oninput: (ev) => { f.q = ev.target.value; renderTransactions(); },
+  }));
+
+  bar.append(el("label", {}, [
+    el("input", {
+      type: "checkbox", checked: f.raw,
+      onchange: (ev) => { f.raw = ev.target.checked; renderTransactions(); },
+    }),
+    " raw descriptions",
+  ]));
+
+  const active = f.account || f.category || f.type || f.from || f.to || f.q;
+  if (active) {
+    bar.append(el("button", {
+      class: "btn link",
+      onclick: () => {
+        state.filters = { account: "", category: "", type: "", from: "", to: "", q: "", raw: f.raw };
+        renderTransactions();
+      },
+    }, "clear filters"));
+  }
+  return bar;
+}
+
 function renderTransactions() {
-  const s = summary();
   const body = $("#transactions-body");
   body.textContent = "";
-  $("#tx-count-hint").textContent = s.count ? plural(s.count, "row") : "";
 
-  if (!s.count) {
+  const all = (state.data ? state.data.transactions : []);
+  $("#tx-count-hint").textContent = all.length ? plural(all.length, "row") : "";
+
+  if (!all.length) {
     body.append(emptyState(
       "No transactions yet",
       "Import a statement and every row lands here, filterable and sortable, with the raw " +
       "description kept exactly as the bank wrote it.",
       true,
     ));
+    return;
+  }
+
+  body.append(renderAccountStrip());
+  body.append(renderFilters(all));
+
+  const rows = sortTransactions(filteredTransactions());
+  const t = totalsFor(rows);
+  const showAll = state.rowLimit === Infinity;
+  const shown = showAll ? rows : rows.slice(0, state.rowLimit);
+
+  const head = (key, label, extra) => el("th", {
+    class: "sortable", style: extra || "",
+    onclick: () => {
+      state.sort = state.sort.key === key
+        ? { key, dir: state.sort.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: key === "amount" || key === "date" ? "desc" : "asc" };
+      renderTransactions();
+    },
+  }, [label, state.sort.key === key
+        ? el("span", { class: "arrow", text: state.sort.dir === "asc" ? " ▲" : " ▼" })
+        : null]);
+
+  const showAccount = !state.filters.account;
+
+  body.append(el("div", { class: "scroll", style: "max-height:calc(100vh - 340px)" }, [
+    el("table", { class: "tbl" }, [
+      el("thead", {}, el("tr", {}, [
+        head("date", "Date"),
+        showAccount ? head("account", "Account") : null,
+        head("description", "Description"),
+        head("category", "Category"),
+        el("th", { text: "Type" }),
+        head("amount", "Amount", "text-align:right"),
+      ])),
+      el("tbody", {}, shown.map((tx) => el("tr", {}, [
+        el("td", { class: "date", text: tx.date }),
+        showAccount ? el("td", { class: "small", text: accountLabel(tx.account) }) : null,
+        el("td", {
+          class: "desc",
+          title: tx.description,
+          text: state.filters.raw ? tx.description : (tx.merchant || tx.description),
+        }),
+        el("td", { class: "small" + (tx.category === UNCATEGORIZED ? " muted" : ""), text: tx.category }),
+        el("td", {}, tx.type === "transfer"
+          ? el("span", { class: "tag transfer", text: "transfer" })
+          : tx.amount > 0 ? el("span", { class: "tag refund", text: "refund" })
+          : el("span", { class: "small muted", text: "" })),
+        el("td", { class: "num " + (tx.amount < 0 ? "neg" : "pos"), text: fmtMoney(tx.amount) }),
+      ]))),
+    ]),
+  ]));
+
+  const line = el("div", { class: "summary-line" }, [
+    el("span", {}, [plural(t.count, "transaction"), rows.length !== all.length
+      ? el("span", { class: "muted", text: ` of ${all.length.toLocaleString()}` }) : null]),
+    el("span", {}, ["Spending ", el("b", { class: t.spend < 0 ? "neg" : "", text: fmtMoney(t.spend) })]),
+    t.refunds ? el("span", {}, ["Refunds ", el("b", { class: "pos", text: fmtMoney(t.refunds) })]) : null,
+    t.fees ? el("span", {}, [FEES_CATEGORY + " ", el("b", { class: "neg", text: fmtMoney(t.fees) })]) : null,
+    t.transfers ? el("span", { class: "muted" }, [
+      "Transfers ", el("b", { text: fmtMoney(t.transfers) }), " (excluded)",
+    ]) : null,
+  ]);
+  body.append(line);
+
+  if (!showAll && rows.length > state.rowLimit) {
+    body.append(el("p", { class: "small muted" }, [
+      `Showing the first ${state.rowLimit.toLocaleString()}. `,
+      el("button", {
+        class: "btn link",
+        onclick: () => { state.rowLimit = Infinity; renderTransactions(); },
+      }, `Show all ${rows.length.toLocaleString()}`),
+    ]));
   }
 }
 
@@ -1155,33 +1581,53 @@ function renderQuestions() {
 function renderImportPreview() {
   const imp = state.pendingImport;
   const panel = el("div", { class: "panel" });
-
-  const first = imp.rows[imp.rows.length - 1], last = imp.rows[0];
-  const span = imp.rows.length
-    ? [imp.rows.map((t) => t.date).sort()[0], imp.rows.map((t) => t.date).sort().pop()]
-    : ["—", "—"];
+  const dates = imp.rows.map((t) => t.date).sort();
+  const accounts = (state.data ? state.data.accounts : []) || [];
 
   panel.append(el("h3", { text: "Review this import" }));
 
   panel.append(el("dl", { class: "facts" }, [
-    el("dt", { text: "File" }),     el("dd", { text: imp.filename }),
-    el("dt", { text: "Format" }),   el("dd", { text: imp.parserLabel }),
-    el("dt", { text: "Rows read" }), el("dd", { text: String(imp.rows.length + imp.problems.length) }),
-    el("dt", { text: "New" }),      el("dd", { text: String(imp.fresh.length) }),
+    el("dt", { text: "File" }),       el("dd", { text: imp.filename }),
+    el("dt", { text: "Format" }),     el("dd", { text: imp.parserLabel }),
+    el("dt", { text: "Rows read" }),  el("dd", { text: String(imp.rows.length + imp.problems.length) }),
+    el("dt", { text: "New" }),        el("dd", { text: String(imp.fresh.length) }),
     el("dt", { text: "Duplicates" }), el("dd", { text: String(imp.duplicates) }),
-    el("dt", { text: "Date range" }), el("dd", { text: span[0] + " \u2192 " + span[1] }),
-    el("dt", { text: "Kinds" }),    el("dd", { text: typeBreakdown(imp.rows).map(([k, n]) => `${n} ${k}`).join(", ") }),
+    el("dt", { text: "Date range" }), el("dd", { text: dates[0] + " → " + dates[dates.length - 1] }),
+    el("dt", { text: "Kinds" }),      el("dd", { text: typeBreakdown(imp.rows).map(([k, n]) => `${n} ${k}`).join(", ") }),
   ]));
 
-  panel.append(el("div", { class: "row", style: "margin-top:10px" }, [
-    el("label", { class: "small muted", for: "import-account-label", text: "Account name" }),
-    el("input", { class: "text", id: "import-account-label", value: imp.account.label, size: "24" }),
-    el("span", { class: "small muted", text: `id: ${imp.account.id}` }),
-  ]));
+  // Which account these rows belong to. With several cards in play, guessing
+  // from the filename is a starting point, not a decision.
+  const picker = el("select", {
+    class: "text",
+    onchange: (ev) => { state.pendingImport.targetId = ev.target.value; restageImport(); render(); },
+  });
+  for (const account of accounts) {
+    picker.append(el("option", {
+      value: account.id,
+      selected: imp.targetId === account.id,
+      text: account.label,
+    }));
+  }
+  picker.append(el("option", { value: "", selected: imp.targetId === "", text: "New account…" }));
+
+  const row = el("div", { class: "row", style: "margin-top:12px" }, [
+    el("label", { class: "small muted", text: "Import into" }), picker,
+  ]);
+  if (!imp.targetId) {
+    row.append(el("input", {
+      class: "text", id: "import-account-label", value: imp.targetLabel, size: "22",
+      oninput: (ev) => { state.pendingImport.targetLabel = ev.target.value; },
+      onchange: () => { restageImport(); render(); },
+    }));
+    row.append(el("span", { class: "small muted", text: `id: ${imp.resolvedId}` }));
+  }
+  panel.append(row);
 
   // Call out the rows that would otherwise produce a wrong number.
   const transfers = imp.rows.filter((t) => t.type === "transfer");
-  const refunds = imp.rows.filter((t) => t.amount > 0 && t.type !== "transfer");
+  const refunds = imp.rows.filter((t) => imp.parser.isRefund(t.issuer_type));
+  const fees = imp.rows.filter((t) => imp.parser.isFee(t.issuer_type));
 
   if (transfers.length) {
     const total = transfers.reduce((sum, t) => sum + t.amount, 0);
@@ -1189,7 +1635,15 @@ function renderImportPreview() {
       el("strong", { text: `${plural(transfers.length, "card payment")} will be marked as transfers.` }),
       `Together they total ${fmtMoney(total)}. This is money moving from another account of yours to ` +
       `pay this card, not spending — counting it as income would understate what you actually spent ` +
-      `by that amount. They are excluded from every spending total. You can change any of them later.`,
+      `by that amount. They are excluded from every spending total.`,
+    ]));
+  }
+  if (fees.length) {
+    const total = fees.reduce((sum, t) => sum + t.amount, 0);
+    panel.append(el("div", { class: "note" }, [
+      el("strong", { text: `${plural(fees.length, "interest or fee charge")} totalling ${fmtMoney(total)}.` }),
+      `These are real expenses, but they are not merchant spending, so they go to their own ` +
+      `"${FEES_CATEGORY}" category instead of landing in a merchant bucket.`,
     ]));
   }
   if (refunds.length) {
@@ -1212,22 +1666,24 @@ function renderImportPreview() {
     ]));
   }
 
-  // A look at what is about to land.
   const preview = imp.fresh.length ? imp.fresh : imp.rows;
   panel.append(el("div", { class: "scroll", style: "margin-top:12px" }, [
     el("table", { class: "tbl" }, [
       el("thead", {}, el("tr", {}, [
         el("th", { text: "Date" }), el("th", { text: "Description" }),
-        el("th", { text: "Chase says" }), el("th", { text: "Type" }),
+        el("th", { text: "Issuer says" }), el("th", { text: "Type" }),
         el("th", { text: "Amount", style: "text-align:right" }),
       ])),
       el("tbody", {}, preview.slice(0, 40).map((tx) => el("tr", {}, [
         el("td", { class: "date", text: tx.date }),
-        el("td", { class: "desc", text: tx.description }),
-        el("td", { class: "small muted", text: tx.issuer_category || "\u2014" }),
+        el("td", { class: "desc", title: tx.description, text: tx.merchant || tx.description }),
+        el("td", { class: "small muted", text: tx.issuer_category || "—" }),
         el("td", {}, el("span", {
-          class: "tag" + (tx.type === "transfer" ? " transfer" : tx.amount > 0 ? " refund" : ""),
-          text: tx.type === "transfer" ? "transfer" : tx.amount > 0 ? "refund" : tx.issuer_type.toLowerCase(),
+          class: "tag" + (tx.type === "transfer" ? " transfer"
+                        : imp.parser.isRefund(tx.issuer_type) ? " refund" : ""),
+          text: tx.type === "transfer" ? "transfer"
+              : imp.parser.isRefund(tx.issuer_type) ? "refund"
+              : (tx.issuer_type || "").toLowerCase(),
         })),
         el("td", { class: "num " + (tx.amount < 0 ? "neg" : "pos"), text: fmtMoney(tx.amount) }),
       ]))),
@@ -1575,6 +2031,17 @@ window.__finance = {
   PARSERS,
   detectParser,
   inferAccount,
+  accountIdFrom,
+  // build step 3
+  resolveCategory,
+  recategorizeAll,
+  ruleMatches,
+  totalsFor,
+  filteredTransactions,
+  sortTransactions,
+  FEES_CATEGORY,
+  TRANSFER_CATEGORY,
+  UNCATEGORIZED,
 };
 
 if (new URLSearchParams(location.search).has("test")) {

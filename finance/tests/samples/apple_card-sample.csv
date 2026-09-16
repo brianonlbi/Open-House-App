@@ -1,0 +1,12 @@
+Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By
+09/14/2026,09/15/2026,"SAMPLE FUEL STOP 497 20 EAST MAIN STREET SAMPLETOWN 00000 NJ USA","Sample Fuel Stop 497","Grocery","Purchase","36.12","Pat Sample"
+09/10/2026,09/10/2026,"SAMPLE SERVICES ONE SAMPLE WAY SAMPLECITY 00000 CA USA","Sample Services","Other","Purchase","0.99","Pat Sample"
+09/08/2026,09/09/2026,"SAMPLE SHOP 440 N SAMPLE AVE #4133 SAMPLEVILLE 00000 CA USA","Sample Shop","Other","Purchase","20.00","Jan Sample"
+08/31/2026,08/31/2026,"INTEREST CHARGE","Interest Charge","Interest","Interest","71.77","Pat Sample"
+08/24/2026,08/24/2026,"ACH DEPOSIT INTERNET TRANSFER FROM ACCOUNT ENDING IN 0000","Ach Deposit Internet Transfer From Account Ending In 0000","Payment","Payment","-200.00","Pat Sample"
+08/23/2026,08/23/2026,"SAMPLE HEALTH 116 W. 23RD ST, 4TH FLOOR SAMPLE CITY 00000 NY USA","Sample Health","Other","Purchase","90.00","Pat Sample"
+03/07/2026,03/07/2026,"SAMPLE DISPUTED CHARGE","Sample Disputed","Debit","Debit","1.00","Pat Sample"
+03/06/2026,03/06/2026,"SAMPLE DISPUTED CHARGE","Sample Disputed","Credit","Credit","-49.99","Pat Sample"
+03/04/2026,03/04/2026,"SAMPLE DISPUTED CHARGE","Sample Disputed","Debit","Debit","49.99","Pat Sample"
+09/11/2024,09/12/2024,"SAMPLE SERVICES ONE SAMPLE WAY 000-000-0000 00000 CA USA","Sample Services","Other","Purchase","95.95","Pat Sample"
+09/11/2024,09/12/2024,"SAMPLE SERVICES ONE SAMPLE WAY 000-000-0000 00000 CA USA","Sample Services","Other","Purchase","95.95","Pat Sample"

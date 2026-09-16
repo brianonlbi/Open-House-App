@@ -279,6 +279,146 @@ async function run(API) {
     ok("purchases end up negative anyway", sale.amount < 0, String(sale.amount));
   }
 
+  describe("parser: apple_card");
+  {
+    const csv = await sample("apple_card-sample.csv");
+    eq("recognised by header alone", API.detectParser(csv).id, "apple_card");
+
+    const out = API.PARSERS.apple_card.parse(csv, "apple_card-sample.csv", "apple-card");
+    const rows = out.transactions;
+    rows.forEach((t) => { t.source_parser = "apple_card"; });
+    API.assignIds(rows);
+
+    eq("reads every data row", rows.length, 11);
+    deepEq("no unreadable rows", out.problems, []);
+
+    // Apple signs the opposite way from Chase. This is the whole point.
+    eq("did not need the safety-net flip", out.flipped, false);
+    const purchase = rows[0];
+    eq("a purchase Apple reports as +36.12 becomes negative", purchase.amount, -36.12);
+    const payment = rows.find((t) => t.issuer_type === "Payment");
+    eq("a payment Apple reports as -200 becomes positive", payment.amount, 200);
+    eq("and is a transfer", payment.type, "transfer");
+
+    eq("dates are ISO", purchase.date, "2026-09-14");
+    eq("clearing date becomes post_date", purchase.post_date, "2026-09-15");
+
+    // Apple ships both a full-address description and a clean merchant name.
+    ok("description keeps the full raw text",
+       purchase.description.includes("20 EAST MAIN STREET"));
+    eq("merchant is captured separately", purchase.merchant, "Sample Fuel Stop 497");
+    eq("a quoted comma inside the description survives",
+       rows[5].description, "SAMPLE HEALTH 116 W. 23RD ST, 4TH FLOOR SAMPLE CITY 00000 NY USA");
+
+    // Shared cards: who spent it.
+    eq("purchased_by is captured", rows[2].purchased_by, "Jan Sample");
+
+    // A disputed charge arrives as a Debit/Credit pair.
+    const credit = rows.find((t) => t.issuer_type === "Credit");
+    eq("a credit is a refund, positive, still an expense", credit.amount, 49.99);
+    eq("not income", credit.type, "expense");
+    const debit = rows.find((t) => t.issuer_type === "Debit" && t.amount === -49.99);
+    ok("its matching debit is negative", debit && debit.amount < 0);
+
+    // Identical rows, again, in a second institution's real export.
+    const twins = rows.filter((t) => t.date === "2024-09-11");
+    eq("both identical rows survive", twins.length, 2);
+    ok("with distinct ids", twins[0].id !== twins[1].id);
+
+    const again = API.PARSERS.apple_card.parse(csv, "apple_card-sample.csv", "apple-card");
+    API.assignIds(again.transactions);
+    deepEq("re-parsing is stable", again.transactions.map((t) => t.id), rows.map((t) => t.id));
+  }
+
+  describe("categories: interest and fees get their own bucket");
+  {
+    const data = API.migrate({ rules: [], overrides: {}, categories: [], transactions: [] });
+
+    const chaseCsv = await sample("chase_card-sample.csv");
+    const chase = API.PARSERS.chase_card.parse(chaseCsv, "c.csv", "chase-1234").transactions;
+    chase.forEach((t) => { t.source_parser = "chase_card"; });
+
+    const appleCsv = await sample("apple_card-sample.csv");
+    const apple = API.PARSERS.apple_card.parse(appleCsv, "a.csv", "apple-card").transactions;
+    apple.forEach((t) => { t.source_parser = "apple_card"; });
+
+    data.transactions = chase.concat(apple);
+    API.assignIds(data.transactions);
+    API.recategorizeAll(data);
+
+    const fees = data.transactions.filter((t) => t.category === API.FEES_CATEGORY);
+    eq("Chase fees and Apple interest land in one category", fees.length, 3);
+    ok("from both institutions",
+       new Set(fees.map((t) => t.source_parser)).size === 2,
+       [...new Set(fees.map((t) => t.source_parser))].join(","));
+    ok("every fee is an expense", fees.every((t) => t.type === "expense"));
+
+    const transfers = data.transactions.filter((t) => t.category === API.TRANSFER_CATEGORY);
+    eq("card payments from both cards are transfers", transfers.length, 2);
+
+    ok("the category list picked up both new names",
+       data.categories.includes(API.FEES_CATEGORY) && data.categories.includes(API.TRANSFER_CATEGORY));
+
+    ok("merchant rows are still uncategorized until rules exist",
+       data.transactions.some((t) => t.category === API.UNCATEGORIZED));
+
+    // A rule beats the issuer, and re-deriving updates the whole history.
+    data.rules = [{ match: "SAMPLE FUEL STOP", category: "Gas" }];
+    API.recategorizeAll(data);
+    const gas = data.transactions.filter((t) => t.category === "Gas");
+    eq("one rule catches the merchant across both cards", gas.length, 3);
+    ok("including the Apple row matched on its merchant column",
+       gas.some((t) => t.source_parser === "apple_card"));
+
+    // An override beats a rule.
+    const target = gas[0];
+    data.overrides[target.id] = { category: "Snacks" };
+    API.recategorizeAll(data);
+    eq("a manual override wins", data.transactions.find((t) => t.id === target.id).category, "Snacks");
+
+    // Removing the rule puts everything back, because nothing was baked in.
+    data.rules = [];
+    data.overrides = {};
+    API.recategorizeAll(data);
+    eq("categories are fully re-derivable",
+       data.transactions.filter((t) => t.category === "Gas").length, 0);
+  }
+
+  describe("ruleMatches");
+  {
+    const tx = { description: "SAMPLE FUEL# 497 SOMEWHERE", merchant: "Sample Fuel 497" };
+    ok("matches the raw description, case-insensitively", API.ruleMatches({ match: "sample fuel" }, tx));
+    ok("matches the clean merchant name too", API.ruleMatches({ match: "Sample Fuel 4" }, tx));
+    ok("does not match something absent", !API.ruleMatches({ match: "SAMPLE GROCER" }, tx));
+    ok("an empty rule never matches", !API.ruleMatches({ match: "  " }, tx));
+  }
+
+  describe("totalsFor — transfers never count as spending");
+  {
+    const rows = [
+      { amount: -100, type: "expense", category: "Gas" },
+      { amount: -50,  type: "expense", category: "Gas" },
+      { amount: 20,   type: "expense", category: "Gas" },              // refund
+      { amount: -30,  type: "expense", category: API.FEES_CATEGORY },  // interest
+      { amount: 500,  type: "transfer", category: API.TRANSFER_CATEGORY },
+    ];
+    const t = API.totalsFor(rows);
+    eq("counts every row", t.count, 5);
+    eq("spending excludes the transfer and nets the refund", t.spend, -160);
+    eq("transfers are reported separately", t.transfers, 500);
+    eq("refunds are reported", t.refunds, 20);
+    eq("fees are reported", t.fees, -30);
+  }
+
+  describe("accountIdFrom");
+  {
+    eq("slugifies a label", API.accountIdFrom("Best Buy Card", []), "best-buy-card");
+    eq("strips punctuation", API.accountIdFrom("Jen's Amex!", []), "jen-s-amex");
+    eq("avoids collisions", API.accountIdFrom("Costco", ["costco"]), "costco-2");
+    eq("keeps avoiding them", API.accountIdFrom("Costco", ["costco", "costco-2"]), "costco-3");
+    eq("never produces an empty id", API.accountIdFrom("!!!", []), "account");
+  }
+
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");
   summary.className = failed ? "fail" : "pass";

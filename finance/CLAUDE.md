@@ -40,7 +40,7 @@ leaves the machine.
 | `finances-data.backup.json` | Previous version, written before every save. One level of undo. Gitignored. |
 | `config.json` | Optional, holds the Anthropic API key. Gitignored. |
 | `tests/tests.html` | Test page. Open at `localhost:8777/tests/tests.html`. |
-| `tests/samples/` | Anonymized statement rows the parser tests run against. Committed. |
+| `tests/samples/` | Anonymized statement rows the parser tests run against. Committed. One `<parser id>-sample.csv` per institution. |
 
 ## How it runs
 
@@ -186,6 +186,26 @@ well; exact-match rules would have split it in two and hidden it.
 Manual overrides are keyed by transaction id and beat rules. When the user
 recategorizes something, offer to turn it into a rule.
 
+`resolveCategory(tx, data)` is the single source of truth, and its order is
+fixed:
+
+1. a manual override for that exact transaction id
+2. the first matching rule
+3. the issuer saying the row is interest or a fee → `Interest & Fees`
+4. the issuer saying the row is internal movement → `Transfer`
+5. `Uncategorized`
+
+`recategorizeAll(data)` re-derives every category from scratch. Call it after an
+import and after **any** rule or override change — that is what makes "change a
+rule and the whole history updates" true rather than aspirational. Never write a
+category anywhere except through this function.
+
+**Interest and fees get their own category** (`Interest & Fees`), by explicit
+request. They are real expenses and stay in spending totals, but they are not
+merchant spending, so burying them in a merchant bucket misrepresents both. Each
+parser declares its own `feeTypes` because issuers name them differently — Chase
+says `Fee`, Apple says `Interest`.
+
 ### Transfers and refunds — the thing that makes homemade finance apps lie
 
 Paying the Amex from checking is not $3,000 of spending. The checking debit and
@@ -215,8 +235,18 @@ added, it excludes transfers too.
 
 Each institution gets its own small parser. Keep them uniform:
 
+- **Parsers are declared, not written.** `makeCsvParser(spec)` builds one from a
+  description of the export, so every institution shares one tested parse loop.
+  Adding a card should be a dozen lines of declaration and a fixture — if it
+  needs a bespoke loop, extend `makeCsvParser` so every format benefits.
 - One entry per institution in `PARSERS`, keyed by a stable lowercase id
-  (`chase_card`, …). The id is also the fixture filename prefix.
+  (`chase_card`, `apple_card`, …). The id is also the fixture filename prefix
+  and is stamped onto every transaction as `source_parser`.
+- A declaration says: `label`, `institution`, `kind`, `required` columns, a `map`
+  of our field → their column, `moneyOut` (`"negative"` if the issuer already
+  signs money out negative, `"positive"` if purchases arrive positive and must
+  be inverted), and which of the issuer's own row types mean `transferTypes`,
+  `refundTypes` and `feeTypes`.
 - Signature: `parse(text, filename, accountId) => { transactions, problems, flipped }`.
   Pure — no DOM, no state, no network. That is what makes it testable.
   `problems` carries rows that could not be read, with line numbers, so the
@@ -240,6 +270,29 @@ Each institution gets its own small parser. Keep them uniform:
 Formats, in priority order: CSV (the main path), QFX/OFX (cleaner, worth it if
 cheap), PDF (best effort via pdf.js from CDN — show extracted rows for review
 before import, never import silently).
+
+### The two formats so far
+
+| | Chase card | Apple Card |
+| --- | --- | --- |
+| Money out | negative | **positive — inverted on import** |
+| Post-date column | `Post Date` | `Clearing Date` |
+| Clean merchant name | no | yes, `Merchant` |
+| Who spent it | no | yes, `Purchased By` |
+| Transfer type | `Payment` | `Payment` |
+| Refund type | `Return` | `Credit` |
+| Fee type | `Fee` | `Interest` |
+
+The two issuers sign money in opposite directions. That is exactly why
+`moneyOut` is declared per parser and then *verified* — never assume a new
+institution matches either of these.
+
+Apple also ships a `Merchant` column far cleaner than its `Description`, which
+carries the full street address. Both are kept: `description` stays verbatim,
+`merchant` holds the clean name. Rules match against **both**, the table shows
+`merchant` when present, and a "raw descriptions" toggle reveals the underlying
+text. When an issuer gives no merchant column, `merchant` is `""` and everything
+falls back to the description.
 
 ## Tests
 
@@ -276,6 +329,27 @@ transactions, and the filter that produced them.
 - **Every number is clickable** and drills into the transaction list filtered to
   exactly what it is made of. No number in this app is a mystery. This is the
   whole point — honor it in every new view.
+
+### Transaction view
+
+**Every account gets its own card in the strip above the table**, showing that
+account's row count, net spending and how much has been paid to it. Clicking one
+filters the table to it; "All accounts" clears it. This is how "what do I have
+going on with each card" gets answered, and it must keep working as accounts are
+added — the strip wraps and nothing is hardcoded per institution.
+
+The Account column appears only when viewing all accounts; it is noise once the
+table is filtered to one.
+
+Sorting is by clicking a column header, date descending by default, second click
+reverses. Rendering is capped at `state.rowLimit` (500) with a "show all"
+control so years of history stay responsive.
+
+Money totals are rounded to cents in `totalsFor()`. Summing floats over hundreds
+of rows drifts, and a total that should be zero must read as zero.
+
+Inline editing of category and notes, and bulk recategorize, land with the
+overrides UI in build step 4.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
@@ -285,7 +359,7 @@ Working vertical slices, stopping after each so the user can try it.
 
 1. ✅ HTML shell, launcher, data file load/save, empty state.
 2. ✅ One CSV parser for one account, plus dedup, importing into the data model.
-3. ⬜ Transaction table with filters. Useful from here on.
+3. ✅ Transaction table with filters, separated by account.
 4. ⬜ Categorization rules and the overrides UI.
 5. ⬜ Transfer and refund handling.
 6. ⬜ Overview dashboard with drill-down.
@@ -327,15 +401,29 @@ confirm" lives; keep it honest as parsers are added.
 id `chase-1234`, label `Chase …1234`. The label is editable in the review panel
 before the first import creates the account.
 
+**Imports choose their account explicitly.** The filename is a guess, not a
+decision. The review panel offers every existing account plus "New account…",
+because several cards are in play and two may be the same institution. Changing
+the account re-stages the import — the account is part of the dedup hash, so
+every id changes with it.
+
+**More accounts are coming**: a second bank card, three store cards, a personal
+checking account, and a spouse's cards. Nothing may assume a fixed number of
+accounts or a single person. Apple's `Purchased By` column is already captured
+as `purchased_by` for exactly that reason.
+
 ## Open questions — ask, do not assume
 
-- **The checking account export.** Still needed: it is the other side of all 22
-  card payments, and the only place income appears. Chase checking CSV has a
+- **The checking account export.** Still needed: it is the other side of every
+  card payment, and the only place income appears. Chase checking CSV has a
   different header from the card (`Details, Posting Date, Description, Amount,
-  Type, Balance, Check or Slip #`), so it needs its own parser.
-- **How to treat interest and fees.** Currently plain expenses. They are the
-  single largest recurring line in the card data — larger than any merchant —
-  so ask whether they want their own category rather than landing in a
-  merchant bucket.
+  Type, Balance, Check or Slip #`), so it needs its own declaration.
+- **The generic column mapper.** Store cards and a spouse's cards are coming,
+  each a new format. The spec calls for showing the user the columns and letting
+  them map once, saved under `column_maps`. Until that exists every new
+  institution needs a declaration added by hand. This is the highest-value thing
+  left before the account list grows.
+- **Whether a spouse's cards are separate accounts or one household view.**
+  Both are reasonable; ask before assuming.
 - **Whether a given pattern is a transfer.** Always confirm before classifying.
 - **Anything that would send data off the machine.** Ask first, every time.
