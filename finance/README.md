@@ -8,18 +8,18 @@ internet.
 
 1. Copy this `finance` folder wherever you want it to live — `~/Documents/finance`
    is fine.
-2. Open Terminal once and make the launcher executable:
+2. The first time only, macOS will refuse to run it. Double-click
+   `start.command`, click **Done** on the warning, then open
+   **System Settings → Privacy & Security**, scroll to **Security**, and click
+   **Open Anyway** next to the message about `start.command`.
 
-   ```
-   chmod +x ~/Documents/finance/start.command
-   ```
+   On older macOS a right-click → **Open** → **Open** does the same thing.
+   Either way it is once, not every time.
 
-   (Only needed if macOS complains that it can't run the file.)
+   The blunt alternative, which also works everywhere: open Terminal, type
+   `xattr -cr ` (with the trailing space), drag the folder in, press return.
 3. Right-click `start.command` → **Make Alias**, and drag the alias to your
    desktop. That's your shortcut.
-
-The first time you double-click it, macOS may say the file is from an
-unidentified developer. Right-click → **Open** → **Open** clears that for good.
 
 ## Using it
 
@@ -104,7 +104,11 @@ Neither data file is ever committed to git. Neither are statements.
 
 ## If something breaks
 
-**"python3 was not found"** — run `xcode-select --install` in Terminal.
+**"This Mac has no working web server built in yet"** — run
+`xcode-select --install` in Terminal, click Install, wait, then try again.
+macOS ships `/usr/bin/python3` as a stub that does nothing until those tools
+are installed, which is why the launcher tests that it actually runs rather
+than just that it exists.
 
 **The page loads but nothing saves** — check the top-right pill. If it says
 "Cached in browser", click Reconnect on the Data file tab. If it says "Loaded by
