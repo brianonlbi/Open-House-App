@@ -302,6 +302,27 @@ th .arrow { opacity: .6; font-size: 9px; }
 }
 .summary-line b { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
+.warnish { color: var(--warn); font-weight: 600; }
+
+/* -------------------------------------------------------- bulk actions */
+.bulkbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 10px; margin-bottom: 8px; border-radius: var(--radius);
+  background: var(--accent-bg); border: 1px solid var(--accent);
+}
+.bulkbar strong { font-size: 12px; }
+table.tbl td.pick, table.tbl th.pick { width: 24px; padding-left: 6px; padding-right: 0; }
+table.tbl td .cell-input {
+  font: inherit; font-size: 11px; width: 100%; min-width: 90px;
+  padding: 1px 4px; border: 1px solid transparent; border-radius: 3px;
+  background: transparent; color: inherit;
+}
+table.tbl td .cell-input:hover { border-color: var(--border); background: var(--bg); }
+table.tbl td .cell-input:focus { border-color: var(--accent); background: var(--bg); outline: none; }
+table.tbl td .cell-input.pinned { font-weight: 600; }
+table.tbl tr.picked td { background: var(--accent-bg); }
+code.small { font-size: 11px; background: var(--bg-sunk); padding: 1px 4px; border-radius: 3px; }
+
 .note {
   padding: 8px 10px; border-radius: var(--radius); font-size: 12px;
   background: var(--accent-bg); border: 1px solid var(--accent); margin-bottom: 10px;
@@ -330,6 +351,7 @@ kbd {
   <nav class="tabs" role="tablist" aria-label="Views">
     <button class="tab" role="tab" data-view="overview"     aria-selected="false">Overview</button>
     <button class="tab" role="tab" data-view="transactions" aria-selected="false">Transactions</button>
+    <button class="tab" role="tab" data-view="categorize"   aria-selected="false">Categorize</button>
     <button class="tab" role="tab" data-view="questions"    aria-selected="false">Questions</button>
     <button class="tab" role="tab" data-view="data"         aria-selected="true">Data file</button>
   </nav>
@@ -356,6 +378,15 @@ kbd {
   <section class="view" id="view-transactions" role="tabpanel">
     <div class="view-head"><h2>Transactions</h2><span class="hint" id="tx-count-hint"></span></div>
     <div id="transactions-body"></div>
+  </section>
+
+  <!-- ========================================================== CATEGORIZE -->
+  <section class="view" id="view-categorize" role="tabpanel">
+    <div class="view-head">
+      <h2>Categorize</h2>
+      <span class="hint" id="uncat-hint"></span>
+    </div>
+    <div id="categorize-body"></div>
   </section>
 
   <!-- =========================================================== QUESTIONS -->
@@ -387,6 +418,7 @@ kbd {
   <span id="st-tx">0 transactions</span>
   <span id="st-accounts">0 accounts</span>
   <span id="st-range"></span>
+  <span id="st-uncat"></span>
   <span class="spacer"></span>
   <span id="st-saved">never saved</span>
 </footer>
@@ -429,6 +461,9 @@ const state = {
   filters: { account: "", category: "", type: "", from: "", to: "", q: "", raw: false },
   sort: { key: "date", dir: "desc" },
   rowLimit: 500,       // rendered rows before "show all"; keeps a big file responsive
+  backlogLimit: 40,    // uncategorized merchants shown before "show more"
+  selected: new Set(), // transaction ids ticked for a bulk change
+  suggestRule: null,   // { match, category, count } offered after a manual recategorize
 };
 
 /* ======================================================================== *
@@ -1526,6 +1561,174 @@ function typeBreakdown(rows) {
   return [...counts].sort((a, b) => b[1] - a[1]);
 }
 
+/* ------------------------------------------------------- building rules */
+
+/**
+ * Is this word per-transaction noise rather than part of the merchant's name?
+ *
+ * Only three things qualify: a bare store number, a phone number, and a mixed
+ * alphanumeric transaction id. Whole alphabetic words are always kept — they
+ * are the merchant's identity, and stripping them collapses unrelated
+ * merchants together.
+ */
+const isNoiseToken = (word) =>
+  /^#?\d+$/.test(word) ||                 // 497, #3830
+  /^\d{3,}[-\d]*$/.test(word) ||          // 800-000-0000
+  (/\d/.test(word) && /[A-Za-z]/.test(word) && word.length >= 6);   // AB8JZT9V22
+
+/**
+ * A grouping key for "the same merchant". Prefers the issuer's clean merchant
+ * name when there is one, so the same shop groups together across cards even
+ * when one issuer writes a street address into the description.
+ */
+function merchantKey(tx) {
+  const base = String(tx.merchant || tx.description || "").toUpperCase();
+  const cleaned = base
+    .replace(/\s*\*\s*/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((w, i) => i === 0 || !isNoiseToken(w))
+    .join(" ")
+    .replace(/#/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || base.trim() || "(blank)";
+}
+
+/**
+ * Propose the `match` text for a rule covering these rows.
+ *
+ * It must be a genuine substring of what it is meant to match, so this only
+ * ever takes a leading run of words — never a key reassembled from
+ * non-adjacent ones, which would produce a rule that matches nothing. The
+ * shortest candidate that still covers every row wins, and the result is
+ * verified before being offered.
+ */
+function suggestMatch(rows) {
+  const candidates = [];
+
+  for (const tx of rows.slice(0, 6)) {
+    const base = String(tx.merchant || tx.description || "").trim();
+    const parts = base.split(/\s+/).filter(Boolean);
+    const kept = [];
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0 && isNoiseToken(parts[i])) break;
+      kept.push(parts[i]);
+      if (kept.join(" ").length >= 20) break;
+    }
+    const candidate = (kept.join(" ") || base).replace(/[^A-Za-z0-9)]+$/, "").trim();
+    if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+  }
+
+  candidates.sort((a, b) => a.length - b.length);
+  for (const candidate of candidates) {
+    if (rows.every((tx) => ruleMatches({ match: candidate }, tx))) return candidate;
+  }
+  return String(rows[0].merchant || rows[0].description || "").trim().slice(0, 24);
+}
+
+/**
+ * Uncategorized transactions grouped by merchant, biggest spend first.
+ *
+ * This is the category list being built from real data rather than from a
+ * template: name the top few merchants and both the categories and the rules
+ * that produce them come out of the same pass.
+ */
+function uncategorizedGroups(data) {
+  const groups = new Map();
+
+  for (const tx of data.transactions) {
+    if (tx.category && tx.category !== UNCATEGORIZED) continue;
+    const key = merchantKey(tx);
+    if (!groups.has(key)) groups.set(key, { key, rows: [], total: 0 });
+    const group = groups.get(key);
+    group.rows.push(tx);
+    group.total += tx.amount;
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      key: group.key,
+      rows: group.rows,
+      count: group.rows.length,
+      total: Math.round(group.total * 100) / 100,
+      match: suggestMatch(group.rows),
+      accounts: [...new Set(group.rows.map((t) => t.account))],
+      last: group.rows.map((t) => t.date).sort().pop(),
+    }))
+    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+}
+
+/** How many transactions each rule actually claims, in rule order. */
+function ruleHitCounts(data) {
+  const counts = data.rules.map(() => 0);
+  for (const tx of data.transactions) {
+    if (data.overrides[tx.id] && data.overrides[tx.id].category) continue;
+    for (let i = 0; i < data.rules.length; i++) {
+      if (ruleMatches(data.rules[i], tx)) { counts[i]++; break; }   // first match wins
+    }
+  }
+  return counts;
+}
+
+/** Register a category name so it appears in pickers even before it is used. */
+function ensureCategory(data, name) {
+  const clean = String(name || "").trim();
+  if (clean && !data.categories.includes(clean)) data.categories.push(clean);
+  return clean;
+}
+
+/** Add a rule and re-derive everything it touches. */
+function addRule(data, match, category, { atTop = false } = {}) {
+  const rule = { match: String(match || "").trim(), category: ensureCategory(data, category) };
+  if (!rule.match || !rule.category) throw new Error("A rule needs both text to match and a category.");
+  if (atTop) data.rules.unshift(rule); else data.rules.push(rule);
+  recategorizeAll(data);
+  return rule;
+}
+
+/**
+ * Pin one transaction to a category, beating every rule.
+ * Setting it back to what the rules already say just clears the override,
+ * rather than leaving a redundant one behind.
+ */
+function setOverride(data, tx, category) {
+  const clean = ensureCategory(data, category);
+  delete data.overrides[tx.id];
+  const withoutOverride = resolveCategory(tx, data);
+  if (!clean || clean === withoutOverride) {
+    tx.category = withoutOverride;
+    return null;
+  }
+  data.overrides[tx.id] = { category: clean };
+  tx.category = clean;
+  return data.overrides[tx.id];
+}
+
+/** Categories in use, with how many transactions each holds. */
+function categoryUsage(data) {
+  const counts = new Map();
+  for (const name of data.categories) counts.set(name, 0);
+  for (const tx of data.transactions) {
+    if (!tx.category) continue;
+    counts.set(tx.category, (counts.get(tx.category) || 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+/** Rename a category everywhere it is referenced, so nothing is orphaned. */
+function renameCategory(data, from, to) {
+  const target = String(to || "").trim();
+  if (!target || target === from) return;
+  data.categories = data.categories.map((c) => (c === from ? target : c));
+  data.categories = [...new Set(data.categories)];
+  for (const rule of data.rules) if (rule.category === from) rule.category = target;
+  for (const id of Object.keys(data.overrides)) {
+    if (data.overrides[id].category === from) data.overrides[id].category = target;
+  }
+  recategorizeAll(data);
+}
+
 /* ======================================================================== *
  * 6. Derived views of the data
  *
@@ -1559,6 +1762,7 @@ function render() {
   renderDataView();
   renderOverview();
   renderTransactions();
+  renderCategorize();
   renderQuestions();
 }
 
@@ -1597,6 +1801,9 @@ function renderStatusBar() {
   $("#st-tx").textContent       = plural(s.count, "transaction");
   $("#st-accounts").textContent = plural(s.accounts, "account");
   $("#st-range").textContent    = s.first ? `${s.first} → ${s.last}` : "";
+  $("#st-uncat").textContent    = s.uncategorized
+    ? `${s.uncategorized.toLocaleString()} uncategorized` : "";
+  $("#st-uncat").className      = s.uncategorized ? "warnish" : "";
   $("#st-saved").textContent    = state.lastSaved
     ? "saved " + fmtDateTime(state.lastSaved)
     : (state.mode === "none" ? "never saved" : "not yet saved this session");
@@ -1638,7 +1845,7 @@ function buildSteps() {
     "Preset questions",
     "Optional natural-language layer",
   ];
-  const doneThrough = 3;  // update as each slice lands
+  const doneThrough = 4;  // update as each slice lands
   return el("ul", { class: "steps" }, steps.map((label, i) => el("li", {
     class: i < doneThrough ? "done" : i === doneThrough ? "next" : "",
     text: `${i + 1}. ${label}`,
@@ -1804,6 +2011,130 @@ function renderFilters(rows) {
   return bar;
 }
 
+/**
+ * Offer to turn a one-off recategorization into a rule.
+ *
+ * The spec asks for this explicitly, and it is what keeps the backlog shrinking:
+ * fixing one row is a chore, fixing every row like it is progress.
+ */
+function offerRule(rows, category, match) {
+  const list = [].concat(rows);
+  if (!list.length) return;
+  const text = match || suggestMatch(list);
+
+  // Only offer a rule that genuinely covers everything it came from. Grouping by
+  // merchant key is too strict here: "Netflix" and "NETFLIX.COM" are different
+  // keys, but one substring catches both.
+  if (!list.every((tx) => ruleMatches({ match: text }, tx))) return;
+
+  const covered = state.data.transactions.filter((tx) => ruleMatches({ match: text }, tx));
+  state.suggestRule = { match: text, category, count: covered.length, txIds: list.map((t) => t.id) };
+}
+
+function renderRuleSuggestion() {
+  const suggestion = state.suggestRule;
+  if (!suggestion) return null;
+
+  return el("div", { class: "note" }, [
+    el("strong", { text: `Make that a rule?` }),
+    el("div", {}, [
+      "Categorize everything containing ",
+      el("code", { class: "small", text: suggestion.match }),
+      ` as ${suggestion.category} — that is `,
+      el("b", { text: plural(suggestion.count, "transaction") }),
+      ", now and in future imports.",
+    ]),
+    el("div", { class: "row", style: "margin-top:8px" }, [
+      el("button", {
+        class: "btn primary",
+        onclick: () => {
+          try {
+            // The rule covers these transactions, so their overrides are redundant.
+            for (const id of suggestion.txIds) delete state.data.overrides[id];
+            addRule(state.data, suggestion.match, suggestion.category, { atTop: true });
+            state.suggestRule = null;
+            toast(`Rule added: "${suggestion.match}" → ${suggestion.category}.`);
+            scheduleSave();
+            render();
+          } catch (err) { toast(err.message, true); }
+        },
+      }, "Create the rule"),
+      el("button", {
+        class: "btn",
+        onclick: () => { state.suggestRule = null; render(); },
+      }, "Just this one"),
+    ]),
+  ]);
+}
+
+/** The bar that appears once rows are ticked. */
+function renderBulkBar(rows) {
+  if (!state.selected.size) return null;
+  const picked = rows.filter((t) => state.selected.has(t.id));
+  const total = picked.reduce((sum, t) => sum + t.amount, 0);
+
+  const apply = (category) => {
+    if (!category) return;
+    for (const tx of picked) setOverride(state.data, tx, category);
+    recategorizeAll(state.data);
+
+    // A rule beats N overrides whenever one piece of text covers the lot.
+    if (picked.length > 1) offerRule(picked, category);
+
+    toast(`${plural(picked.length, "transaction")} set to ${category}.`);
+    state.selected.clear();
+    scheduleSave();
+    render();
+  };
+
+  return el("div", { class: "bulkbar" }, [
+    el("strong", { text: `${plural(picked.length, "transaction")} selected` }),
+    el("span", { class: "num small", text: fmtMoney(Math.round(total * 100) / 100) }),
+    el("span", { class: "small muted", text: "set category to" }),
+    categoryInput("", apply, "category…"),
+    el("button", {
+      class: "btn link",
+      onclick: () => { state.selected.clear(); render(); },
+    }, "clear selection"),
+  ]);
+}
+
+/** The editable category cell. Typing here pins one transaction. */
+function categoryCell(tx) {
+  const pinned = !!(state.data.overrides[tx.id] && state.data.overrides[tx.id].category);
+  return el("input", {
+    class: "cell-input" + (pinned ? " pinned" : "") +
+           (tx.category === UNCATEGORIZED ? " muted" : ""),
+    list: "category-names",
+    value: tx.category === UNCATEGORIZED ? "" : tx.category,
+    placeholder: UNCATEGORIZED,
+    title: pinned ? "Pinned by hand. Clear it to hand this back to the rules." : tx.category,
+    onkeydown: (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); } },
+    onchange: (ev) => {
+      const value = ev.target.value.trim();
+      const before = tx.category;
+      setOverride(state.data, tx, value);
+      recategorizeAll(state.data);
+      if (value && value !== before) offerRule([tx], value); else state.suggestRule = null;
+      scheduleSave();
+      render();
+    },
+  });
+}
+
+/** The editable notes cell. */
+function notesCell(tx) {
+  return el("input", {
+    class: "cell-input", value: tx.notes || "", placeholder: "—",
+    onkeydown: (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); } },
+    onchange: (ev) => {
+      tx.notes = ev.target.value;
+      scheduleSave();
+      renderStatusBar();
+    },
+  });
+}
+
 function renderTransactions() {
   const body = $("#transactions-body");
   body.textContent = "";
@@ -1843,17 +2174,45 @@ function renderTransactions() {
 
   const showAccount = !state.filters.account;
 
-  body.append(el("div", { class: "scroll", style: "max-height:calc(100vh - 340px)" }, [
+  body.append(categoryDatalist());
+  const suggestion = renderRuleSuggestion();
+  if (suggestion) body.append(suggestion);
+  const bulk = renderBulkBar(rows);
+  if (bulk) body.append(bulk);
+
+  const allShown = shown.length > 0 && shown.every((t) => state.selected.has(t.id));
+  const toggleAll = el("input", {
+    type: "checkbox", checked: allShown, title: "Select everything shown",
+    onchange: (ev) => {
+      for (const tx of shown) {
+        if (ev.target.checked) state.selected.add(tx.id); else state.selected.delete(tx.id);
+      }
+      render();
+    },
+  });
+
+  body.append(el("div", { class: "scroll", style: "max-height:calc(100vh - 360px)" }, [
     el("table", { class: "tbl" }, [
       el("thead", {}, el("tr", {}, [
+        el("th", { class: "pick" }, toggleAll),
         head("date", "Date"),
         showAccount ? head("account", "Account") : null,
         head("description", "Description"),
         head("category", "Category"),
+        el("th", { text: "Notes" }),
         el("th", { text: "Type" }),
         head("amount", "Amount", "text-align:right"),
       ])),
-      el("tbody", {}, shown.map((tx) => el("tr", {}, [
+      el("tbody", {}, shown.map((tx) => el("tr", {
+        class: state.selected.has(tx.id) ? "picked" : "",
+      }, [
+        el("td", { class: "pick" }, el("input", {
+          type: "checkbox", checked: state.selected.has(tx.id),
+          onchange: (ev) => {
+            if (ev.target.checked) state.selected.add(tx.id); else state.selected.delete(tx.id);
+            render();
+          },
+        })),
         el("td", { class: "date", text: tx.date }),
         showAccount ? el("td", { class: "small", text: accountLabel(tx.account) }) : null,
         el("td", {
@@ -1861,7 +2220,8 @@ function renderTransactions() {
           title: tx.description,
           text: state.filters.raw ? tx.description : (tx.merchant || tx.description),
         }),
-        el("td", { class: "small" + (tx.category === UNCATEGORIZED ? " muted" : ""), text: tx.category }),
+        el("td", {}, categoryCell(tx)),
+        el("td", {}, notesCell(tx)),
         el("td", {}, tx.type === "transfer"
           ? el("span", { class: "tag transfer", text: "transfer" })
           : tx.amount > 0 ? el("span", { class: "tag refund", text: "refund" })
@@ -1893,6 +2253,275 @@ function renderTransactions() {
       }, `Show all ${rows.length.toLocaleString()}`),
     ]));
   }
+}
+
+/* --------------------------------------------------------- categorize view */
+
+/** A category picker: the existing list, plus free text for a new one. */
+function categoryInput(value, onCommit, placeholder) {
+  const listId = "category-names";
+  const input = el("input", {
+    class: "text", list: listId, value: value || "", size: "18",
+    placeholder: placeholder || "category…",
+    onkeydown: (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); } },
+    onchange: (ev) => onCommit(ev.target.value.trim()),
+  });
+  return input;
+}
+
+function categoryDatalist() {
+  const names = (state.data ? state.data.categories : []).slice().sort();
+  return el("datalist", { id: "category-names" }, names.map((n) => el("option", { value: n })));
+}
+
+/** After a save, put the view back where it was rather than scrolling to top. */
+function afterEdit() {
+  scheduleSave();
+  render();
+}
+
+function renderCategorize() {
+  const body = $("#categorize-body");
+  body.textContent = "";
+  const data = state.data;
+
+  if (!data || !data.transactions.length) {
+    body.append(emptyState(
+      "Nothing to categorize yet",
+      "Import a statement first. Then this is where the category list gets built — " +
+      "from what you actually spend on, not from a template.",
+      true,
+    ));
+    return;
+  }
+
+  body.append(categoryDatalist());
+
+  const groups = uncategorizedGroups(data);
+  const backlog = groups.reduce((sum, g) => sum + g.count, 0);
+  $("#uncat-hint").textContent = backlog
+    ? `${backlog.toLocaleString()} uncategorized`
+    : "all categorized";
+
+  /* ------------------------------------------------ the backlog, ranked */
+  const panel = el("div", { class: "panel" });
+  panel.append(el("h3", { text: "Uncategorized merchants, biggest first" }));
+
+  if (!groups.length) {
+    panel.append(el("p", { class: "small muted",
+      text: "Nothing left uncategorized. Every transaction is claimed by a rule or an override." }));
+  } else {
+    panel.append(el("p", { class: "small muted" },
+      "Name a category for a merchant and it becomes a rule, applied to every matching " +
+      "transaction across every account — past and future. Work down from the top and the " +
+      "biggest numbers get answered first. The rule text is editable: shortening it is how one " +
+      "rule catches a merchant that bills under several spellings."));
+
+    const shown = groups.slice(0, state.backlogLimit);
+    const rows = shown.map((group) => {
+      // Held outside the input so a broadened rule survives until it is used.
+      const draft = { match: group.match };
+
+      const assign = (category) => {
+        if (!category) return;
+        try {
+          const covered = data.transactions.filter((t) => ruleMatches({ match: draft.match }, t));
+          addRule(data, draft.match, category);
+          state.dirty = true;
+          toast(`"${draft.match}" \u2192 ${category}. ${plural(covered.length, "transaction")} categorized.`);
+          afterEdit();
+        } catch (err) { toast(err.message, true); }
+      };
+
+      return el("tr", {}, [
+        el("td", { class: "desc", title: group.rows[0].description, text: group.key }),
+        el("td", { class: "num", text: String(group.count) }),
+        el("td", { class: "num " + (group.total < 0 ? "neg" : "pos"), text: fmtMoney(group.total) }),
+        el("td", { class: "small muted", text: group.last }),
+        el("td", {}, el("input", {
+          class: "cell-input", value: group.match, size: "18",
+          title: "Shorten this to catch more spellings of the same merchant.",
+          onchange: (ev) => { draft.match = ev.target.value.trim() || group.match; },
+        })),
+        el("td", {}, categoryInput("", assign)),
+      ]);
+    });
+
+    panel.append(el("div", { class: "scroll", style: "margin-top:10px;max-height:420px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "Merchant" }), el("th", { text: "Rows" }),
+          el("th", { text: "Total" }), el("th", { text: "Last seen" }),
+          el("th", { text: "Rule text" }), el("th", { text: "Category" }),
+        ])),
+        el("tbody", {}, rows),
+      ])));
+
+    if (groups.length > state.backlogLimit) {
+      panel.append(el("p", { class: "small muted", style: "margin-top:6px" }, [
+        `Showing the top ${state.backlogLimit} of ${groups.length} merchants. `,
+        el("button", {
+          class: "btn link",
+          onclick: () => { state.backlogLimit += 50; render(); },
+        }, "Show more"),
+      ]));
+    }
+  }
+  body.append(panel);
+
+  /* ------------------------------------------------------------- rules */
+  const rulesPanel = el("div", { class: "panel" });
+  rulesPanel.append(el("h3", { text: `Rules (${data.rules.length})` }));
+  rulesPanel.append(el("p", { class: "small muted" },
+    "Checked in order, first match wins. Matching is case-insensitive and looks at both the " +
+    "raw description and the merchant name. Editing a rule re-derives the whole history."));
+
+  const hits = ruleHitCounts(data);
+  const move = (from, to) => {
+    if (to < 0 || to >= data.rules.length) return;
+    const [rule] = data.rules.splice(from, 1);
+    data.rules.splice(to, 0, rule);
+    recategorizeAll(data);
+    state.dirty = true;
+    afterEdit();
+  };
+
+  const ruleRows = data.rules.map((rule, i) => el("tr", {}, [
+    el("td", { class: "num small muted", text: String(i + 1) }),
+    el("td", {}, el("input", {
+      class: "text", value: rule.match, size: "22",
+      onchange: (ev) => {
+        rule.match = ev.target.value.trim();
+        recategorizeAll(data); state.dirty = true; afterEdit();
+      },
+    })),
+    el("td", {}, categoryInput(rule.category, (value) => {
+      if (!value) return;
+      rule.category = ensureCategory(data, value);
+      recategorizeAll(data); state.dirty = true; afterEdit();
+    })),
+    el("td", { class: "num" + (hits[i] ? "" : " neg"), text: String(hits[i]),
+               title: hits[i] ? "" : "This rule matches nothing. Earlier rules may be claiming its transactions." }),
+    el("td", { class: "small" }, [
+      el("button", { class: "btn link", title: "Move up", onclick: () => move(i, i - 1) }, "↑"),
+      " ",
+      el("button", { class: "btn link", title: "Move down", onclick: () => move(i, i + 1) }, "↓"),
+      " ",
+      el("button", {
+        class: "btn link", onclick: () => {
+          data.rules.splice(i, 1);
+          recategorizeAll(data); state.dirty = true; afterEdit();
+        },
+      }, "delete"),
+    ]),
+  ]));
+
+  // A blank row at the bottom for adding one by hand.
+  let draft = { match: "", category: "" };
+  const tryAdd = () => {
+    if (!draft.match.trim() || !draft.category.trim()) return;
+    try {
+      addRule(data, draft.match, draft.category);
+      state.dirty = true;
+      draft = { match: "", category: "" };
+      afterEdit();
+    } catch (err) { toast(err.message, true); }
+  };
+  ruleRows.push(el("tr", {}, [
+    el("td", { class: "small muted", text: "+" }),
+    el("td", {}, el("input", {
+      class: "text", size: "22", placeholder: "text to match…", value: "",
+      onchange: (ev) => { draft.match = ev.target.value; tryAdd(); },
+    })),
+    el("td", {}, categoryInput("", (value) => { draft.category = value; tryAdd(); })),
+    el("td", {}), el("td", {}),
+  ]));
+
+  rulesPanel.append(el("div", { class: "scroll", style: "margin-top:10px;max-height:340px" },
+    el("table", { class: "tbl" }, [
+      el("thead", {}, el("tr", {}, [
+        el("th", { text: "#" }), el("th", { text: "When the text contains" }),
+        el("th", { text: "Category" }), el("th", { text: "Rows" }), el("th", { text: "" }),
+      ])),
+      el("tbody", {}, ruleRows),
+    ])));
+  body.append(rulesPanel);
+
+  /* --------------------------------------------------- categories + overrides */
+  const cols = el("div", { class: "cols" });
+
+  const usage = categoryUsage(data);
+  cols.append(el("div", { class: "panel" }, [
+    el("h3", { text: `Categories (${usage.length})` }),
+    el("p", { class: "small muted",
+      text: "Renaming updates every rule and override that refers to it." }),
+    el("div", { class: "scroll", style: "margin-top:8px;max-height:300px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "Category" }), el("th", { text: "Rows" }), el("th", { text: "" }),
+        ])),
+        el("tbody", {}, usage.map(([name, count]) => el("tr", {}, [
+          el("td", {}, el("input", {
+            class: "text", value: name, size: "18",
+            onchange: (ev) => {
+              renameCategory(data, name, ev.target.value);
+              state.dirty = true; afterEdit();
+            },
+          })),
+          el("td", { class: "num", text: String(count) }),
+          el("td", {}, count === 0
+            ? el("button", {
+                class: "btn link", onclick: () => {
+                  data.categories = data.categories.filter((c) => c !== name);
+                  state.dirty = true; afterEdit();
+                },
+              }, "remove")
+            : el("button", {
+                class: "btn link", onclick: () => {
+                  state.filters = Object.assign({}, state.filters, { category: name, account: "" });
+                  switchView("transactions");
+                  renderTransactions();
+                },
+              }, "show")),
+        ]))),
+      ])),
+  ]));
+
+  const overrideIds = Object.keys(data.overrides);
+  const overridePanel = el("div", { class: "panel" }, [
+    el("h3", { text: `Manual overrides (${overrideIds.length})` }),
+    el("p", { class: "small muted",
+      text: "One transaction pinned to a category, beating every rule. Clearing one hands it " +
+            "back to the rules." }),
+  ]);
+  if (!overrideIds.length) {
+    overridePanel.append(el("p", { class: "small muted", text: "None yet." }));
+  } else {
+    const byId = new Map(data.transactions.map((t) => [t.id, t]));
+    overridePanel.append(el("div", { class: "scroll", style: "margin-top:8px;max-height:300px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "Transaction" }), el("th", { text: "Pinned to" }), el("th", { text: "" }),
+        ])),
+        el("tbody", {}, overrideIds.map((id) => {
+          const tx = byId.get(id);
+          return el("tr", {}, [
+            el("td", { class: "desc", title: tx ? tx.description : id,
+                       text: tx ? (tx.merchant || tx.description) : "(not in this data file)" }),
+            el("td", { class: "small", text: data.overrides[id].category }),
+            el("td", {}, el("button", {
+              class: "btn link",
+              onclick: () => {
+                delete data.overrides[id];
+                recategorizeAll(data); state.dirty = true; afterEdit();
+              },
+            }, "clear")),
+          ]);
+        })),
+      ])));
+  }
+  cols.append(overridePanel);
+  body.append(cols);
 }
 
 function renderQuestions() {
@@ -2428,7 +3057,24 @@ async function run(fn) {
   }
 }
 
+/**
+ * Save shortly after the last edit rather than on every keystroke.
+ *
+ * Categorizing is a burst of small changes, and every write also rewrites the
+ * backup file. Coalescing them keeps one good backup instead of a hundred
+ * near-identical ones.
+ */
+let saveTimer = null;
+function scheduleSave(delay = 1200) {
+  state.dirty = true;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { run(saveNow); }, delay);
+  renderTopBar();
+  renderStatusBar();
+}
+
 async function saveNow() {
+  clearTimeout(saveTimer);
   if (!state.data) { toast("Nothing to save yet.", true); return; }
   if (state.mode === "folder") {
     await saveToDisk();
@@ -2622,6 +3268,17 @@ window.__finance = {
   parserFromSpec,
   makeCsvParser,
   allParsers,
+  // build step 4
+  merchantKey,
+  suggestMatch,
+  uncategorizedGroups,
+  ruleHitCounts,
+  addRule,
+  setOverride,
+  categoryUsage,
+  renameCategory,
+  ensureCategory,
+  isNoiseToken,
   // build step 3
   resolveCategory,
   recategorizeAll,

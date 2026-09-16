@@ -184,7 +184,14 @@ they were the largest single line of spending. Substring rules handle that
 well; exact-match rules would have split it in two and hidden it.
 
 Manual overrides are keyed by transaction id and beat rules. When the user
-recategorizes something, offer to turn it into a rule.
+recategorizes something, offer to turn it into a rule — `offerRule()` does this
+after an inline edit and after a bulk change, and accepting it deletes the
+now-redundant overrides. A rule that covers a hundred rows is worth far more
+than a hundred pinned rows, and the data file stays small.
+
+`setOverride()` drops an override that merely agrees with the rules rather than
+leaving a redundant one behind forever. Clearing a category clears the override
+and hands the transaction back.
 
 `resolveCategory(tx, data)` is the single source of truth, and its order is
 fixed:
@@ -374,6 +381,38 @@ transactions, and the filter that produced them.
   exactly what it is made of. No number in this app is a mystery. This is the
   whole point — honor it in every new view.
 
+### Building the category list
+
+`uncategorizedGroups(data)` is the heart of step 4: uncategorized transactions
+grouped by merchant, ranked by absolute total. Naming a category for a group
+creates the rule, so the category list and the rules come out of one pass — this
+is the "build it from my real data" decision made concrete.
+
+Two helpers make that safe:
+
+- `merchantKey(tx)` groups "the same shop". It prefers the issuer's clean
+  `merchant` when there is one, so a shop groups across cards even when one
+  issuer writes a street address into the description. It strips only bare store
+  numbers, phone numbers and mixed alphanumeric transaction ids — never whole
+  alphabetic words, which are the merchant's identity.
+- `suggestMatch(rows)` proposes the rule text. It only ever takes a **leading
+  run of words**, never a key reassembled from non-adjacent ones, because a rule
+  must be a genuine substring of what it is meant to match. The shortest
+  candidate that covers every row wins, and the result is verified before being
+  offered.
+
+**The suggested rule text is editable in the backlog, and that matters.** Real
+data had one auto shop billing under two spellings that differ only by a space —
+`SOME SHOP CAR CARE CENTE` and `SOME SHOP CARCARE CENTER`. They are two groups
+and the conservative suggestion is the full string; shortening it by hand to
+`SOME SHOP` catches both, and together they were the largest single line of
+spending in the file. Do not try to merge such
+groups automatically — collapsing on whitespace would merge unrelated merchants
+too. Human judgement belongs exactly here.
+
+`ruleHitCounts(data)` shows how many rows each rule actually claims, in rule
+order, so a rule shadowed by an earlier one shows as 0 and can be spotted.
+
 ### Transaction view
 
 **Every account gets its own card in the strip above the table**, showing that
@@ -392,8 +431,15 @@ control so years of history stay responsive.
 Money totals are rounded to cents in `totalsFor()`. Summing floats over hundreds
 of rows drifts, and a total that should be zero must read as zero.
 
-Inline editing of category and notes, and bulk recategorize, land with the
-overrides UI in build step 4.
+Category and notes are edited inline. Changing a category pins that one
+transaction (an override) and offers a rule. Ticking rows gives a bulk bar that
+sets them all at once, and then offers one rule if a single piece of text covers
+the selection — which is looser than grouping by merchant key on purpose:
+`Netflix` and `NETFLIX.COM` are different keys but one substring catches both.
+
+Editing is a burst of small changes, so writes go through `scheduleSave()`,
+which coalesces them after ~1.2s. Every write also rewrites the backup, and one
+good backup beats a hundred near-identical ones.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
@@ -404,8 +450,8 @@ Working vertical slices, stopping after each so the user can try it.
 1. ✅ HTML shell, launcher, data file load/save, empty state.
 2. ✅ One CSV parser for one account, plus dedup, importing into the data model.
 3. ✅ Transaction table with filters, separated by account.
-4. ⬜ Categorization rules and the overrides UI. **Next.**
-5. ⬜ Transfer and refund handling.
+4. ✅ Categorization rules, the backlog, and the overrides UI.
+5. ⬜ Transfer and refund handling (cross-account matching). **Next.**
 6. ⬜ Overview dashboard with drill-down.
 7. ⬜ Preset questions.
 8. ⬜ Optional natural language layer.
@@ -473,5 +519,8 @@ other side of every card payment and the only place income appears.
 - **Whether a recurring store-card format deserves promoting** from a saved
   mapping to a built-in parser. A mapping works fine; a built-in is only worth
   it when the format needs handling a declaration cannot express.
+- **Jen's cards are still to come.** Held up on access, not on anything here.
+  They are separate accounts; nothing in the categorization layer needs changing
+  for them, and rules apply across every account automatically.
 - **Whether a given pattern is a transfer.** Always confirm before classifying.
 - **Anything that would send data off the machine.** Ask first, every time.

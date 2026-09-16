@@ -633,6 +633,244 @@ async function run(API) {
     eq("nothing is misfiled as a refund", t.refunds, 0);
   }
 
+  describe("isNoiseToken — what is not part of a merchant's name");
+  {
+    const n = API.isNoiseToken;
+    ok("a bare store number", n("497"));
+    ok("a hashed store number", n("#3830"));
+    ok("a phone number", n("800-000-0000"));
+    ok("a transaction id", n("AB8JZT9V22"));
+    ok("a whole word is never noise", !n("SAMPLEMART"));
+    ok("nor a short word with a digit", !n("7ELEVEN") === false || !n("CVS"));
+    ok("nor punctuation-only merchant text", !n("CVS/PHARMACY"));
+  }
+
+  describe("merchantKey — the same shop groups across cards");
+  {
+    const k = API.merchantKey;
+    eq("strips a trailing store number", k({ description: "SAMPLE FUEL# 497" }), "SAMPLE FUEL");
+    eq("and a hashed one", k({ description: "SAMPLE MART #3830" }), "SAMPLE MART");
+    eq("strips a transaction id", k({ description: "SOCIAL *AL8JZT9V22" }), "SOCIAL");
+    eq("strips a phone number", k({ description: "SAMPLE CO  *800-000-0000" }), "SAMPLE CO");
+
+    // The point: one issuer writes a street address, the other a clean name.
+    eq("prefers the issuer's merchant name when there is one",
+       k({ merchant: "Sample Fuel 497", description: "SAMPLE FUEL 497 20 EAST MAIN ST SAMPLETOWN NJ USA" }),
+       "SAMPLE FUEL");
+    eq("so both cards land on the same key",
+       k({ description: "SAMPLE FUEL# 497" }),
+       k({ merchant: "Sample Fuel 497", description: "SAMPLE FUEL 497 20 EAST MAIN ST" }));
+
+    ok("never returns empty", k({ description: "" }).length > 0);
+    ok("keeps whole words, so unrelated merchants stay apart",
+       k({ description: "SAMPLE GROCER 12" }) !== k({ description: "SAMPLE GARAGE 12" }));
+  }
+
+  describe("suggestMatch — a rule must actually match what it came from");
+  {
+    const rows = [
+      { description: "SAMPLE FUEL# 497 SOMEWHERE" },
+      { description: "SAMPLE FUEL# 994 ELSEWHERE" },
+      { merchant: "Sample Fuel 700", description: "SAMPLE FUEL 700 1 MAIN ST" },
+    ];
+    const match = API.suggestMatch(rows);
+    ok("covers every row it was built from",
+       rows.every((tx) => API.ruleMatches({ match }, tx)), `match was "${match}"`);
+    ok("is a real substring, not a reassembled key",
+       rows.every((tx) => (tx.merchant || tx.description).toUpperCase().includes(match.toUpperCase())));
+    ok("drops the trailing hash", !match.endsWith("#"), match);
+
+    // A key built from non-adjacent words would match nothing — guard against it.
+    const awkward = [{ description: "SAMPLE 123 HARDWARE CO" }];
+    const m2 = API.suggestMatch(awkward);
+    ok("still matches an awkward description", API.ruleMatches({ match: m2 }, awkward[0]), m2);
+  }
+
+  describe("uncategorizedGroups — the backlog, biggest first");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "1", date: "2026-01-01", amount: -500, description: "SAMPLE GARAGE", category: "Uncategorized", type: "expense" },
+      { id: "2", date: "2026-01-02", amount: -30,  description: "SAMPLE FUEL# 497", category: "Uncategorized", type: "expense" },
+      { id: "3", date: "2026-01-03", amount: -40,  description: "SAMPLE FUEL# 994", category: "Uncategorized", type: "expense" },
+      { id: "4", date: "2026-01-04", amount: -10,  description: "SAMPLE SHOP", category: "Groceries", type: "expense" },
+      { id: "5", date: "2026-01-05", amount: 700,  description: "PAYMENT", category: "Transfer", type: "transfer" },
+    ]});
+    const groups = API.uncategorizedGroups(data);
+
+    eq("only uncategorized rows are in the backlog", groups.length, 2);
+    eq("biggest total first", groups[0].key, "SAMPLE GARAGE");
+    eq("the fuel stops group together", groups[1].count, 2);
+    eq("and their totals add up", groups[1].total, -70);
+    ok("each group carries a usable rule suggestion",
+       groups.every((g) => g.rows.every((tx) => API.ruleMatches({ match: g.match }, tx))));
+    eq("the group records when it was last seen", groups[1].last, "2026-01-03");
+  }
+
+  describe("addRule and the resolution order");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "a", date: "2026-01-01", amount: -30, description: "SAMPLE FUEL# 497", type: "expense" },
+      { id: "b", date: "2026-01-02", amount: -80, description: "SAMPLE GROCER 12", type: "expense" },
+    ]});
+    API.recategorizeAll(data);
+    eq("everything starts uncategorized", data.transactions[0].category, API.UNCATEGORIZED);
+
+    API.addRule(data, "SAMPLE FUEL", "Gas");
+    eq("a rule categorizes matching rows immediately", data.transactions[0].category, "Gas");
+    eq("and leaves others alone", data.transactions[1].category, API.UNCATEGORIZED);
+    ok("the category is registered", data.categories.includes("Gas"));
+
+    // First match wins, so order is meaningful.
+    API.addRule(data, "SAMPLE", "Everything", { atTop: true });
+    eq("a rule at the top wins", data.transactions[0].category, "Everything");
+    data.rules.reverse();
+    API.recategorizeAll(data);
+    eq("reordering changes the answer", data.transactions[0].category, "Gas");
+
+    ok("a rule needs both halves", (() => {
+      try { API.addRule(data, "", "Gas"); return false; } catch { return true; }
+    })());
+  }
+
+  describe("ruleHitCounts — shows a rule that is shadowed");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "a", date: "2026-01-01", amount: -30, description: "SAMPLE FUEL# 497", type: "expense" },
+    ]});
+    API.addRule(data, "SAMPLE", "Broad");
+    API.addRule(data, "SAMPLE FUEL", "Gas");
+    const hits = API.ruleHitCounts(data);
+    eq("the first rule claims it", hits[0], 1);
+    eq("the shadowed rule claims nothing", hits[1], 0);
+    eq("and the transaction took the first one", data.transactions[0].category, "Broad");
+  }
+
+  describe("setOverride — one transaction pinned, beating rules");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "a", date: "2026-01-01", amount: -30, description: "SAMPLE FUEL# 497", type: "expense" },
+      { id: "b", date: "2026-01-02", amount: -30, description: "SAMPLE FUEL# 994", type: "expense" },
+    ]});
+    API.addRule(data, "SAMPLE FUEL", "Gas");
+
+    const tx = data.transactions[0];
+    API.setOverride(data, tx, "Snacks");
+    API.recategorizeAll(data);
+    eq("the override wins over the rule", tx.category, "Snacks");
+    eq("its neighbour is untouched", data.transactions[1].category, "Gas");
+    eq("one override is recorded", Object.keys(data.overrides).length, 1);
+
+    // Setting it back to what the rules already say should not leave a
+    // redundant override sitting in the data file forever.
+    API.setOverride(data, tx, "Gas");
+    eq("a redundant override is dropped", Object.keys(data.overrides).length, 0);
+    eq("and the rule takes over again", tx.category, "Gas");
+
+    API.setOverride(data, tx, "Snacks");
+    API.setOverride(data, tx, "");
+    eq("clearing an override also removes it", Object.keys(data.overrides).length, 0);
+  }
+
+  describe("renameCategory — nothing is left pointing at the old name");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "a", date: "2026-01-01", amount: -30, description: "SAMPLE FUEL# 497", type: "expense" },
+      { id: "b", date: "2026-01-02", amount: -80, description: "SAMPLE GROCER", type: "expense" },
+    ]});
+    API.addRule(data, "SAMPLE FUEL", "Gas");
+    API.setOverride(data, data.transactions[1], "Gas");
+    API.recategorizeAll(data);
+
+    API.renameCategory(data, "Gas", "Fuel");
+    eq("the rule points at the new name", data.rules[0].category, "Fuel");
+    eq("the override does too", data.overrides[data.transactions[1].id].category, "Fuel");
+    eq("transactions re-derive", data.transactions[0].category, "Fuel");
+    ok("the old name is gone from the list", !data.categories.includes("Gas"));
+    ok("the new one is there", data.categories.includes("Fuel"));
+  }
+
+  describe("categories survive a data-file round trip");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "a", date: "2026-01-01", amount: -30, description: "SAMPLE FUEL# 497", type: "expense" },
+    ]});
+    API.addRule(data, "SAMPLE FUEL", "Gas");
+    const reloaded = API.migrate(JSON.parse(JSON.stringify(data)));
+    API.recategorizeAll(reloaded);
+    eq("the rule still applies after save and load", reloaded.transactions[0].category, "Gas");
+    deepEq("the rules come back intact", reloaded.rules, data.rules);
+  }
+
+  describe("changing a rule re-derives the whole history, not just new rows");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "a", date: "2024-01-01", amount: -30, description: "SAMPLE FUEL# 497", type: "expense" },
+      { id: "b", date: "2026-01-01", amount: -30, description: "SAMPLE FUEL# 994", type: "expense" },
+    ]});
+    API.addRule(data, "SAMPLE FUEL", "Gas");
+    ok("both years categorized", data.transactions.every((t) => t.category === "Gas"));
+
+    data.rules[0].category = "Vehicles";
+    API.recategorizeAll(data);
+    ok("both years follow the edit", data.transactions.every((t) => t.category === "Vehicles"),
+       data.transactions.map((t) => t.category).join(","));
+
+    data.rules = [];
+    API.recategorizeAll(data);
+    ok("removing the rule puts both back",
+       data.transactions.every((t) => t.category === API.UNCATEGORIZED));
+  }
+
+  describe("categorizing across two institutions with one rule");
+  {
+    const chaseCsv = await sample("chase_card-sample.csv");
+    const appleCsv = await sample("apple_card-sample.csv");
+    const chase = API.PARSERS.chase_card.parse(chaseCsv, "c.csv", "chase").transactions;
+    const apple = API.PARSERS.apple_card.parse(appleCsv, "a.csv", "apple").transactions;
+    chase.forEach((t) => { t.source_parser = "chase_card"; });
+    apple.forEach((t) => { t.source_parser = "apple_card"; });
+
+    const data = API.migrate({ transactions: chase.concat(apple) });
+    API.assignIds(data.transactions);
+    API.recategorizeAll(data);
+
+    const groups = API.uncategorizedGroups(data);
+    const fuel = groups.find((g) => g.key.startsWith("SAMPLE FUEL"));
+    ok("the fuel stop groups across both cards", !!fuel);
+    ok("covering rows from each", new Set(fuel.rows.map((t) => t.account)).size === 2,
+       [...new Set(fuel.rows.map((t) => t.account))].join(","));
+
+    API.addRule(data, fuel.match, "Gas");
+    const gas = data.transactions.filter((t) => t.category === "Gas");
+    eq("one rule catches them all", gas.length, fuel.count);
+    ok("from both institutions", new Set(gas.map((t) => t.source_parser)).size === 2);
+
+    // Fees and transfers were already claimed and must not be stolen by it.
+    ok("interest is still Interest & Fees",
+       data.transactions.some((t) => t.category === API.FEES_CATEGORY));
+    ok("payments are still Transfer",
+       data.transactions.some((t) => t.category === API.TRANSFER_CATEGORY));
+  }
+
+  describe("a rule beats the issuer's fee and transfer defaults");
+  {
+    const chaseCsv = await sample("chase_card-sample.csv");
+    const rows = API.PARSERS.chase_card.parse(chaseCsv, "c.csv", "chase").transactions;
+    rows.forEach((t) => { t.source_parser = "chase_card"; });
+    const data = API.migrate({ transactions: rows });
+    API.assignIds(data.transactions);
+    API.recategorizeAll(data);
+
+    const before = data.transactions.find((t) => t.description === "LATE FEE");
+    eq("starts as a fee", before.category, API.FEES_CATEGORY);
+
+    API.addRule(data, "LATE FEE", "Penalties");
+    eq("an explicit rule takes precedence", before.category, "Penalties");
+    ok("but it is still an expense", before.type === "expense");
+    ok("and interest, unruled, stays a fee",
+       data.transactions.find((t) => t.description.includes("INTEREST")).category === API.FEES_CATEGORY);
+  }
+
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");
   summary.className = failed ? "fail" : "pass";

@@ -55,6 +55,26 @@ remembered from then on — the next file from that card imports straight away.
 Re-importing the same file is safe. Overlapping months are safe. Duplicates are
 detected and skipped, and the review screen tells you how many.
 
+## Sorting out categories
+
+The **Categorize** tab lists the merchants you haven't categorized yet, biggest
+spend first. Type a category next to one and it becomes a rule — applied to
+every matching transaction on every card, past and future. Work down from the
+top and the biggest numbers get answered first.
+
+The **rule text** next to each merchant is editable. Shorten it when a shop
+bills under more than one spelling, and one rule catches them all.
+
+Rules are checked in order and the first match wins, so you can put a specific
+rule above a general one. The Rows column shows how many transactions each rule
+actually claims — a rule showing 0 is being shadowed by one above it.
+
+In the transactions table you can also type straight into the Category column to
+pin a single transaction, and it'll offer to turn that into a rule. Tick several
+rows to set them all at once. Notes are editable the same way.
+
+Nothing is ever baked in. Change a rule and the whole history re-derives.
+
 ## Where things are
 
 - `finances-data.json` — everything: transactions, rules, notes. **Back this up.**
