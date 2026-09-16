@@ -232,11 +232,29 @@ Working vertical slices, stopping after each so the user can try it.
 Update `buildSteps()` in `finances.html` (the `doneThrough` constant) as each
 slice lands, and tick the box here.
 
+## Decisions made
+
+**First account: the main checking account.** Chosen deliberately over a credit
+card — checking is where paychecks land and where card payments originate, so
+building it first means transfers and card payments are visible from the start
+rather than being retrofitted at step 5. Institution and column layout are
+pinned once the first sample export arrives.
+
+**The category list is derived from real data, not a template.** After the first
+import, rank merchants by total dollars, show the user the top ones, and have
+them name a category for each. Two reasons this is better than shipping a
+standard list: the categories end up matching how this household actually
+spends, and the same pass produces the initial rules list for free — naming a
+category for `WAWA` *is* the `WAWA → Gas` rule.
+
+So: do not hardcode a category list anywhere. `categories` stays empty until it
+is built from the user's own transactions, and it stays editable afterwards.
+
 ## Open questions — ask, do not assume
 
-- **Which accounts and institutions to support first.** Nothing is hardcoded yet;
-  `accounts` starts empty.
-- **The category list.** `categories` deliberately starts empty rather than
-  shipping a guess. Settled at step 4.
+- **Which institution the checking account is at**, and its CSV column layout.
+  Waiting on a sample export. Nothing is hardcoded; `accounts` starts empty.
+- **Which account comes second.** Likely the most-used credit card, so that
+  transfer detection has two sides to match against.
 - **Whether a given pattern is a transfer.** Always confirm before classifying.
 - **Anything that would send data off the machine.** Ask first, every time.
