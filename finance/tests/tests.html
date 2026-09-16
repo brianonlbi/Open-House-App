@@ -419,6 +419,220 @@ async function run(API) {
     eq("never produces an empty id", API.accountIdFrom("!!!", []), "account");
   }
 
+  describe("headerSignature");
+  {
+    const a = API.headerSignature(["Date", "Description", "Amount"]);
+    eq("same columns, same signature", API.headerSignature(["Date", "Description", "Amount"]), a);
+    eq("case and padding do not matter", API.headerSignature([" date ", "DESCRIPTION", "Amount"]), a);
+    ok("different columns differ", API.headerSignature(["Date", "Amount"]) !== a);
+    ok("column order matters", API.headerSignature(["Description", "Date", "Amount"]) !== a);
+  }
+
+  describe("guessMapping — a store card with split debit/credit columns");
+  {
+    const csv = await sample("unknown-split-sample.csv");
+    eq("no built-in parser claims it", API.detectParser(csv, null).id, null);
+
+    const rows = API.parseCSV(csv);
+    const header = rows[0];
+    const map = API.guessMapping(header, rows.slice(1));
+
+    eq("finds the date", map.date, "Date");
+    eq("finds the description", map.description, "Description");
+    eq("maps money out to its own column", map.debit, "Debit");
+    eq("maps money in to its own column", map.credit, "Credit");
+    ok("does not invent a combined amount column", !map.amount);
+    ok("does not mistake Status for a field we want",
+       !Object.values(map).includes("Status"), JSON.stringify(map));
+  }
+
+  describe("parserFromSpec — split columns parse without a sign question");
+  {
+    const csv = await sample("unknown-split-sample.csv");
+    const rows = API.parseCSV(csv);
+    const map = API.guessMapping(rows[0], rows.slice(1));
+
+    const parser = API.parserFromSpec({
+      label: "Sample Store Card", institution: "Sample Store", kind: "credit_card",
+      map, transferTypes: [], refundTypes: [], feeTypes: [],
+    });
+    ok("knows it is using split columns", parser.splitAmounts);
+
+    const out = parser.parse(csv, "store.csv", "store");
+    eq("reads every row", out.transactions.length, 7);
+    deepEq("nothing unreadable", out.problems, []);
+    eq("never needs a sign flip", out.flipped, false);
+
+    const purchase = out.transactions[0];
+    eq("a debit becomes negative", purchase.amount, -449.99);
+    const payment = out.transactions.find((t) => t.description === "ONLINE PAYMENT THANK YOU");
+    eq("a credit becomes positive", payment.amount, 250);
+    const refund = out.transactions.find((t) => t.description === "RETURNED MERCHANDISE");
+    eq("a returned item is positive too", refund.amount, 44.99);
+    eq("a quoted comma still survives", out.transactions[3].description, "SAMPLE TOOLS, INC.");
+
+    const total = out.transactions.reduce((sum, t) => sum + t.amount, 0);
+    eq("the arithmetic adds up", Number(total.toFixed(2)), -423.61);
+  }
+
+  describe("guessMapping — a checking account export");
+  {
+    const csv = await sample("unknown-checking-sample.csv");
+    eq("no built-in parser claims it", API.detectParser(csv, null).id, null);
+
+    const rows = API.parseCSV(csv);
+    const map = API.guessMapping(rows[0], rows.slice(1));
+
+    eq("finds the posting date", map.date, "Posting Date");
+    eq("finds the description", map.description, "Description");
+    eq("finds the single signed amount column", map.amount, "Amount");
+    eq("finds the row type", map.issuer_type, "Type");
+    ok("does not claim Balance as the amount", map.amount !== "Balance");
+
+    eq("reads the sign convention off the data", API.guessMoneyOut(rows[0], rows.slice(1), "Amount"), "negative");
+
+    const values = API.typeValues(rows[0], rows.slice(1), "Type");
+    ok("lists the distinct row types", values.length >= 5, JSON.stringify(values));
+    ok("most common first", values[0][1] >= values[values.length - 1][1]);
+  }
+
+  describe("a mapped checking account: income, transfers and fees");
+  {
+    const csv = await sample("unknown-checking-sample.csv");
+    const rows = API.parseCSV(csv);
+    const map = API.guessMapping(rows[0], rows.slice(1));
+
+    const spec = {
+      label: "Personal Account", institution: "Sample Bank", kind: "checking",
+      map, moneyOut: "negative", incomeWhenPositive: true,
+      transferTypes: ["ACCT_XFER"], refundTypes: [], feeTypes: ["FEE_TRANSACTION"],
+    };
+    const out = API.parserFromSpec(spec).parse(csv, "chk.csv", "personal");
+    const txs = out.transactions;
+    txs.forEach((t) => { t.source_parser = "map:test"; });
+
+    eq("reads every row", txs.length, 7);
+
+    const paycheck = txs.find((t) => t.description.includes("DIRECT DEP"));
+    eq("a deposit into checking is income", paycheck.type, "income");
+    ok("and is positive", paycheck.amount > 0);
+
+    const cardPayment = txs.find((t) => t.description.includes("Payment to Chase"));
+    eq("paying a card from checking is a transfer", cardPayment.type, "transfer");
+
+    const mortgage = txs.find((t) => t.description.includes("MORTGAGE"));
+    eq("an ordinary debit is an expense", mortgage.type, "expense");
+    ok("and is negative", mortgage.amount < 0);
+
+    const t = API.totalsFor(txs);
+    eq("income is counted separately, not as negative spending", t.income, 4050);
+    eq("spending excludes both income and the transfer", t.spend, -2629.18);
+    eq("the transfer is reported on its own", t.transfers, -700);
+
+    // Fees resolve through the saved mapping, not the built-in parser table.
+    const data = API.migrate({
+      transactions: txs, rules: [], overrides: {}, categories: [],
+      column_maps: { test: spec },
+    });
+    API.assignIds(data.transactions);
+    API.recategorizeAll(data);
+    const fee = data.transactions.find((x) => x.description.includes("SERVICE FEE"));
+    eq("a mapped parser's fee type still reaches Interest & Fees", fee.category, API.FEES_CATEGORY);
+    eq("and its transfer is categorised too",
+       data.transactions.find((x) => x.description.includes("Payment to Chase")).category,
+       API.TRANSFER_CATEGORY);
+  }
+
+  describe("a saved mapping is reused automatically");
+  {
+    const csv = await sample("unknown-split-sample.csv");
+    const rows = API.parseCSV(csv);
+    const signature = API.headerSignature(rows[0]);
+    const map = API.guessMapping(rows[0], rows.slice(1));
+
+    const data = API.migrate({ transactions: [], column_maps: {} });
+    eq("unknown before saving", API.detectParser(csv, data).id, null);
+
+    data.column_maps[signature] = {
+      label: "Sample Store Card", institution: "Sample Store", kind: "credit_card",
+      map, columns: rows[0], transferTypes: ["x"], refundTypes: [], feeTypes: [],
+    };
+    const found = API.detectParser(csv, data);
+    eq("recognised afterwards", found.id, "map:" + signature);
+    eq("and marked as coming from a saved mapping", found.source, "saved");
+    ok("with a working parser", found.parser.parse(csv, "s.csv", "store").transactions.length === 7);
+
+    ok("allParsers exposes it alongside the built-ins",
+       Object.keys(API.allParsers(data)).includes("map:" + signature));
+    ok("built-ins are still there", !!API.allParsers(data).chase_card);
+  }
+
+  describe("built-in parsers still win over any mapping");
+  {
+    const chaseCsv = await sample("chase_card-sample.csv");
+    const data = API.migrate({
+      transactions: [],
+      column_maps: { [API.headerSignature(API.parseCSV(chaseCsv)[0])]: { label: "wrong", map: {} } },
+    });
+    eq("a known format is never sent to a saved mapping",
+       API.detectParser(chaseCsv, data).id, "chase_card");
+  }
+
+  describe("TYPE_GUESS — substring matching would misread bank codes");
+  {
+    const g = API.TYPE_GUESS;
+
+    ok("a card payment is a transfer", g.transferTypes("Payment"));
+    ok("ACCT_XFER is a transfer", g.transferTypes("ACCT_XFER"));
+    ok("a bare Credit is a refund", g.refundTypes("Credit"));
+    ok("Return is a refund", g.refundTypes("Return"));
+    ok("Interest is a fee", g.feeTypes("Interest"));
+    ok("FEE_TRANSACTION is a fee", g.feeTypes("FEE_TRANSACTION"));
+
+    // The whole reason this is token-based. Each of these contains a word that
+    // a substring rule would match, and each would hide real money.
+    ok("ACH_CREDIT is NOT a refund — it is a paycheck", !g.refundTypes("ACH_CREDIT"));
+    ok("ACH_CREDIT is not a transfer either", !g.transferTypes("ACH_CREDIT"));
+    ok("DEPOSIT is not a transfer", !g.transferTypes("DEPOSIT"));
+    ok("ACH_DEBIT is not a transfer", !g.transferTypes("ACH_DEBIT"));
+    ok("DEBIT_CARD is nothing special", !g.transferTypes("DEBIT_CARD") &&
+       !g.refundTypes("DEBIT_CARD") && !g.feeTypes("DEBIT_CARD"));
+    ok("CHECK_PAID is nothing special", !g.transferTypes("CHECK_PAID"));
+    ok("Sale is nothing special", !g.transferTypes("Sale") && !g.refundTypes("Sale"));
+  }
+
+  describe("a guessed checking mapping gets the money right end to end");
+  {
+    const csv = await sample("unknown-checking-sample.csv");
+    const rows = API.parseCSV(csv);
+    const header = rows[0], body = rows.slice(1);
+    const map = API.guessMapping(header, body);
+
+    // Exactly what beginMapping does, with nothing corrected by hand.
+    const values = API.typeValues(header, body, map.issuer_type);
+    const guessed = { transferTypes: [], refundTypes: [], feeTypes: [] };
+    for (const [value] of values) {
+      for (const bucket of Object.keys(API.TYPE_GUESS)) {
+        if (API.TYPE_GUESS[bucket](value) &&
+            !Object.values(guessed).flat().includes(value)) guessed[bucket].push(value);
+      }
+    }
+    deepEq("only the real transfer is guessed as one", guessed.transferTypes, ["ACCT_XFER"]);
+    deepEq("nothing is mistaken for a refund", guessed.refundTypes, []);
+    deepEq("the service fee is found", guessed.feeTypes, ["FEE_TRANSACTION"]);
+
+    const out = API.parserFromSpec(Object.assign({
+      label: "Personal Account", kind: "checking", map,
+      moneyOut: "negative", incomeWhenPositive: true,
+    }, guessed)).parse(csv, "chk.csv", "personal");
+
+    const t = API.totalsFor(out.transactions);
+    eq("both deposits count as income", t.income, 4050);
+    eq("spending is negative, as spending should be", t.spend, -2629.18);
+    eq("only the account transfer is excluded", t.transfers, -700);
+    eq("nothing is misfiled as a refund", t.refunds, 0);
+  }
+
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");
   summary.className = failed ? "fail" : "pass";

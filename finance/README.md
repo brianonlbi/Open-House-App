@@ -38,6 +38,23 @@ browser's cache until you click it.
 
 `⌘S` saves at any time.
 
+## Adding a statement
+
+Drag a CSV onto the page, or use **Import statement…** on the Data file tab.
+
+You get a review screen before anything is saved: how many rows were read, how
+many are new, how many are duplicates you already have, and what will be treated
+as a card payment, a refund, or interest. Nothing is written until you click
+Import.
+
+**A card the app hasn't seen before** opens a mapping screen instead. It shows
+every column in your file with an example value and its best guess at what each
+one is. Check it, fix anything wrong, name the account, and save. That format is
+remembered from then on — the next file from that card imports straight away.
+
+Re-importing the same file is safe. Overlapping months are safe. Duplicates are
+detected and skipped, and the review screen tells you how many.
+
 ## Where things are
 
 - `finances-data.json` — everything: transactions, rules, notes. **Back this up.**

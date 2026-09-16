@@ -423,6 +423,7 @@ const state = {
   dirty: false,        // in-memory changes not yet written to disk
   lastSaved: null,     // ISO timestamp of the last successful write
   view: "data",
+  pendingMapping: null,// an unfamiliar file waiting for its columns to be mapped
   pendingImport: null, // a parsed file staged for review, not yet committed
   lastImport: null,    // { read, imported, duplicates, problems } of the last commit
   filters: { account: "", category: "", type: "", from: "", to: "", q: "", raw: false },
@@ -836,6 +837,12 @@ function makeCsvParser(spec) {
     label: spec.label,
     institution: spec.institution,
     kind: spec.kind || "credit_card",
+    /** Set only by a user-saved mapping, where they named the account themselves. */
+    accountLabel: spec.accountLabel || "",
+
+    /** True when money out and money in live in separate columns rather than in
+     *  one signed column. Then `moneyOut` does not apply at all. */
+    splitAmounts: !!(spec.map && (spec.map.debit || spec.map.credit) && !spec.map.amount),
     required: spec.required,
     map: spec.map,
 
@@ -846,6 +853,11 @@ function makeCsvParser(spec) {
     transferTypes: spec.transferTypes || [],
     refundTypes: spec.refundTypes || [],
     feeTypes: spec.feeTypes || [],
+
+    /** True for deposit accounts (checking, savings): money in that is not a
+     *  transfer is income. On a credit card, money in is a payment or a refund,
+     *  never income, so this stays false. */
+    incomeWhenPositive: !!spec.incomeWhenPositive,
 
     matches(header) {
       const present = new Set(header.map((h) => h.trim()));
@@ -858,8 +870,12 @@ function makeCsvParser(spec) {
     isRefund(issuerType) { return this.refundTypes.includes(issuerType); },
 
     /** The issuer states outright what a row is; that beats guessing. */
-    typeFor(issuerType) {
-      return this.transferTypes.includes(issuerType) ? "transfer" : "expense";
+    typeFor(issuerType, amount) {
+      if (this.transferTypes.includes(issuerType)) return "transfer";
+      if (this.incomeWhenPositive && amount > 0 && !this.refundTypes.includes(issuerType)) {
+        return "income";
+      }
+      return "expense";
     },
 
     parse(text, filename, accountId) {
@@ -882,14 +898,29 @@ function makeCsvParser(spec) {
           (at[field] === undefined || at[field] === -1 ? "" : (row[at[field]] ?? ""));
 
         const date = toISODate(get("date"));
-        let amount = Number(String(get("amount")).replace(/[$,\s]/g, ""));
+        const num = (v) => Number(String(v).replace(/[$,\s]/g, ""));
+
+        // Two shapes exist. One signed Amount column, or a pair of columns where
+        // the column itself says the direction — Citi-issued store cards do this.
+        // With a pair, take magnitudes: the column, not the sign, is the truth.
+        let amount;
+        if (this.splitAmounts) {
+          const outValue = this.map.debit ? num(get("debit")) : NaN;
+          const inValue = this.map.credit ? num(get("credit")) : NaN;
+          const hasOut = Number.isFinite(outValue) && get("debit") !== "";
+          const hasIn = Number.isFinite(inValue) && get("credit") !== "";
+          amount = (hasIn ? Math.abs(inValue) : 0) - (hasOut ? Math.abs(outValue) : 0);
+          if (!hasOut && !hasIn) amount = NaN;
+        } else {
+          amount = num(get("amount"));
+        }
 
         if (!date || !Number.isFinite(amount)) {
           problems.push({ line: i + 2, text: row.join(","),
                           why: !date ? "unreadable date" : "unreadable amount" });
           return;
         }
-        if (this.moneyOut === "positive") amount = -amount;
+        if (!this.splitAmounts && this.moneyOut === "positive") amount = -amount;
 
         const issuerType = get("issuer_type").trim();
 
@@ -902,7 +933,7 @@ function makeCsvParser(spec) {
           merchant: get("merchant").trim(),  // issuer's clean name, when it provides one
           account: accountId,
           category: "",                      // filled by resolveCategory
-          type: this.typeFor(issuerType),
+          type: this.typeFor(issuerType, amount),
           source_file: filename,
           source_parser: "",                 // stamped by beginImport
           notes: get("notes").trim(),
@@ -916,7 +947,7 @@ function makeCsvParser(spec) {
       // are plain purchases — not transfers, refunds or fees — must end up negative.
       // Importing a year of expenses backwards would otherwise be completely silent.
       let flipped = false;
-      const purchases = transactions.filter((t) =>
+      const purchases = this.splitAmounts ? [] : transactions.filter((t) =>
         !this.transferTypes.includes(t.issuer_type) &&
         !this.refundTypes.includes(t.issuer_type) &&
         !this.feeTypes.includes(t.issuer_type));
@@ -1007,7 +1038,7 @@ function ruleMatches(rule, tx) {
  * `issuer_category` for reference only — issuers categorise the same merchant
  * inconsistently, which would make the same question return different answers.
  */
-function resolveCategory(tx, data) {
+function resolveCategory(tx, data, parsers) {
   const override = data.overrides[tx.id];
   if (override && override.category) return override.category;
 
@@ -1015,7 +1046,7 @@ function resolveCategory(tx, data) {
     if (ruleMatches(rule, tx)) return rule.category;
   }
 
-  const parser = PARSERS[tx.source_parser];
+  const parser = (parsers || allParsers(data))[tx.source_parser];
   if (parser && parser.isFee(tx.issuer_type)) return FEES_CATEGORY;
 
   if (tx.type === "transfer") return TRANSFER_CATEGORY;
@@ -1029,7 +1060,10 @@ function resolveCategory(tx, data) {
  * are never the only copy of a decision.
  */
 function recategorizeAll(data) {
-  for (const tx of data.transactions) tx.category = resolveCategory(tx, data);
+  // Build the parser lookup once rather than per row — a mapped parser is
+  // reconstructed from its saved spec, and there can be thousands of rows.
+  const parsers = allParsers(data);
+  for (const tx of data.transactions) tx.category = resolveCategory(tx, data, parsers);
 
   // Keep the category list in step with what is actually in use.
   const used = new Set(data.transactions.map((t) => t.category));
@@ -1039,15 +1073,299 @@ function recategorizeAll(data) {
   return data;
 }
 
-/** Pick the parser that recognises this file's header row. */
-function detectParser(text) {
-  const rows = parseCSV(text.slice(0, 4096));
+/* ------------------------------------------------- unknown formats: mapping */
+
+/**
+ * A stable fingerprint of a file's header row. Two exports from the same
+ * institution have the same columns, so the same signature, which is how a
+ * mapping saved once gets applied automatically ever after.
+ */
+function headerSignature(header) {
+  return hashId(header.map((h) => h.trim().toLowerCase()).join("␟"));
+}
+
+/** Built-in parsers plus one rebuilt from each mapping the user has saved. */
+function allParsers(data) {
+  const out = Object.assign({}, PARSERS);
+  for (const [signature, spec] of Object.entries((data && data.column_maps) || {})) {
+    out[MAPPED_PREFIX + signature] = makeCsvParser(spec);
+  }
+  return out;
+}
+
+const MAPPED_PREFIX = "map:";
+
+/** The fields a mapping can fill. Only the first three are required. */
+const MAPPABLE_FIELDS = [
+  { field: "date",            label: "Date",           required: true,
+    help: "When the transaction happened. Drives every total." },
+  { field: "amount",          label: "Amount",         required: true,
+    help: "One column holding both directions, signed. Leave blank if your file " +
+          "splits them into two columns instead." },
+  { field: "debit",           label: "Amount out",     required: false,
+    help: "Only if money out has its own column (many store cards do this)." },
+  { field: "credit",          label: "Amount in",      required: false,
+    help: "Only if money in has its own column." },
+  { field: "description",     label: "Description",    required: true,
+    help: "Raw text from the statement. Kept exactly as written." },
+  { field: "post_date",       label: "Posted date",    required: false,
+    help: "When it settled. Used for reconciling, never for totals." },
+  { field: "merchant",        label: "Merchant",       required: false,
+    help: "A clean merchant name, if the export has one." },
+  { field: "issuer_type",     label: "Row type",       required: false,
+    help: "Their label for what each row is. Lets payments and refunds be spotted." },
+  { field: "issuer_category", label: "Their category", required: false,
+    help: "Kept for reference only. Never used as your category." },
+  { field: "notes",           label: "Memo",           required: false, help: "" },
+  { field: "purchased_by",    label: "Purchased by",   required: false,
+    help: "Who spent it, on a shared card." },
+];
+
+const FIELD_HINTS = {
+  date:            [/^transaction\s*date$/i, /^trans\.?\s*date$/i, /^date$/i, /^posting\s*date$/i, /date/i],
+  post_date:       [/^post(ing|ed)?\s*date$/i, /^clearing\s*date$/i, /^settle(ment)?\s*date$/i],
+  description:     [/^description$/i, /^payee$/i, /^details$/i, /^name$/i, /^transaction$/i, /desc/i],
+  merchant:        [/^merchant$/i, /^merchant\s*name$/i],
+  amount:          [/^amount(\s*\(usd\))?$/i, /^amount$/i, /^value$/i, /^amount/i],
+  debit:           [/^debit$/i, /^withdrawal(s)?$/i, /^charges?$/i, /^money\s*out$/i],
+  credit:          [/^credit$/i, /^deposit(s)?$/i, /^payments?$/i, /^money\s*in$/i],
+  issuer_type:     [/^type$/i, /^transaction\s*type$/i],
+  issuer_category: [/^category$/i, /^classification$/i],
+  notes:           [/^memo$/i, /^notes?$/i],
+  purchased_by:    [/^purchased\s*by$/i, /^cardholder$/i, /^user$/i, /^member$/i],
+};
+
+const looksLikeDate  = (v) => !!toISODate(v);
+const looksLikeMoney = (v) => v !== "" && Number.isFinite(Number(String(v).replace(/[$,\s]/g, "")));
+
+/**
+ * Propose a mapping for an unfamiliar file.
+ *
+ * Header names first, then the data itself as a tie-breaker — a column called
+ * "Date" that holds no dates should not win, and a file whose columns are named
+ * unhelpfully can still be sorted out from its values.
+ */
+function guessMapping(header, rows) {
+  const sample = rows.slice(0, 25);
+  const columnValues = header.map((_, i) => sample.map((r) => (r[i] ?? "").trim()).filter(Boolean));
+  const share = (values, test) => (values.length ? values.filter(test).length / values.length : 0);
+
+  const used = new Set();
+  const map = {};
+
+  const claim = (field, index) => {
+    if (index < 0 || used.has(index)) return false;
+    used.add(index);
+    map[field] = header[index];
+    return true;
+  };
+
+  const byHint = (field, extraTest) => {
+    for (const pattern of (FIELD_HINTS[field] || [])) {
+      const index = header.findIndex((h, i) =>
+        !used.has(i) && pattern.test(h.trim()) && (!extraTest || extraTest(columnValues[i])));
+      if (index !== -1) return claim(field, index);
+    }
+    return false;
+  };
+
+  // Dates: prefer a transaction date over a posted date, and require real dates.
+  byHint("date", (values) => share(values, looksLikeDate) > 0.8);
+  byHint("post_date", (values) => share(values, looksLikeDate) > 0.8);
+  if (!map.date) {
+    const index = header.findIndex((h, i) => !used.has(i) && share(columnValues[i], looksLikeDate) > 0.8);
+    claim("date", index);
+  }
+
+  // Amount: a single signed column, or a debit/credit pair. Try the pair first,
+  // because a file that has one usually has no combined column at all.
+  const moneyish = (values) => values.length === 0 || share(values, looksLikeMoney) > 0.8;
+  const hadDebit = byHint("debit", moneyish);
+  const hadCredit = byHint("credit", moneyish);
+  if (!hadDebit && !hadCredit) {
+    byHint("amount", (values) => share(values, looksLikeMoney) > 0.8);
+    if (!map.amount) {
+      const index = header.findIndex((h, i) => !used.has(i) && share(columnValues[i], looksLikeMoney) > 0.8);
+      claim("amount", index);
+    }
+  }
+
+  byHint("merchant");
+  byHint("issuer_type");
+  byHint("issuer_category");
+  byHint("purchased_by");
+  byHint("notes");
+  byHint("description");
+
+  // Still no description: take the widest remaining text column.
+  if (!map.description) {
+    let best = -1, bestWidth = 0;
+    header.forEach((h, i) => {
+      if (used.has(i)) return;
+      const values = columnValues[i];
+      if (!values.length || share(values, looksLikeMoney) > 0.5) return;
+      const width = values.reduce((sum, v) => sum + v.length, 0) / values.length;
+      if (width > bestWidth) { bestWidth = width; best = i; }
+    });
+    claim("description", best);
+  }
+
+  return map;
+}
+
+/** Guess the sign convention from the amounts themselves. */
+function guessMoneyOut(header, rows, amountColumn) {
+  const index = header.indexOf(amountColumn);
+  if (index === -1) return "negative";
+  const values = rows.map((r) => Number(String(r[index] ?? "").replace(/[$,\s]/g, "")))
+                     .filter((n) => Number.isFinite(n) && n !== 0);
+  if (!values.length) return "negative";
+  const positive = values.filter((n) => n > 0).length / values.length;
+  // Most rows on any statement are purchases. If most amounts are positive, the
+  // issuer is signing money out positive.
+  return positive > 0.6 ? "positive" : "negative";
+}
+
+/** Distinct values of the chosen row-type column, most common first. */
+function typeValues(header, rows, typeColumn) {
+  const index = header.indexOf(typeColumn);
+  if (index === -1) return [];
+  const counts = new Map();
+  for (const row of rows) {
+    const value = (row[index] ?? "").trim();
+    if (value) counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]);
+}
+
+/**
+ * Guess what an issuer's row types mean, by whole words rather than substrings.
+ *
+ * Substring matching is actively dangerous here. A bank type of `ACH_CREDIT` is
+ * a paycheck, but it contains "credit", so a substring rule calls it a refund
+ * and the money vanishes from income into a positive "expense". `ACH_DEBIT` and
+ * `DEPOSIT` have the same problem with "transfer".
+ *
+ * So: match on tokens, keep the lists short, and lean towards leaving a row
+ * visible. A misplaced row that still shows up is easy to spot and retick; one
+ * quietly excluded from every total is not. These are only suggestions — the
+ * mapping panel shows each one with its row count for confirmation.
+ */
+const typeTokens = (value) => String(value).toLowerCase().split(/[^a-z]+/).filter(Boolean);
+
+const TYPE_GUESS = {
+  transferTypes: (value) =>
+    typeTokens(value).some((t) => ["payment", "transfer", "xfer", "autopay"].includes(t)),
+  refundTypes: (value) =>
+    typeTokens(value).some((t) => ["return", "refund", "reversal"].includes(t)) ||
+    // bare "Credit" means a refund; "ACH_CREDIT" means money arriving
+    typeTokens(value).join(" ") === "credit",
+  feeTypes: (value) =>
+    typeTokens(value).some((t) => ["fee", "fees", "interest"].includes(t)),
+};
+
+/** Stage an unfamiliar file for column mapping. */
+function beginMapping(text, filename, header, signature) {
+  const rows = parseCSV(text).slice(1);
+  const map = guessMapping(header, rows);
+  const values = map.issuer_type ? typeValues(header, rows, map.issuer_type) : [];
+
+  const guessed = { transferTypes: [], refundTypes: [], feeTypes: [] };
+  for (const [value] of values) {
+    for (const bucket of Object.keys(TYPE_GUESS)) {
+      // A row is one thing, so the first bucket that claims it wins.
+      if (TYPE_GUESS[bucket](value) && !Object.values(guessed).flat().includes(value)) {
+        guessed[bucket].push(value);
+      }
+    }
+  }
+
+  state.pendingMapping = {
+    text, filename, header, signature, rows,
+    sample: rows.slice(0, 25),
+    typeValues: values,
+    spec: {
+      label: filename.replace(/\.[a-z]+$/i, "").replace(/[_-]+/g, " ").slice(0, 40),
+      institution: "",
+      kind: "credit_card",
+      map,
+      required: [map.date, map.amount, map.description].filter(Boolean),
+      moneyOut: guessMoneyOut(header, rows, map.amount),
+      transferTypes: guessed.transferTypes,
+      refundTypes: guessed.refundTypes,
+      feeTypes: guessed.feeTypes,
+      incomeWhenPositive: false,
+    },
+  };
+  state.pendingImport = null;
+  switchView("data");
+  render();
+}
+
+/** Build the parser a mapping describes, for live preview and for real use. */
+function parserFromSpec(spec) {
+  return makeCsvParser(Object.assign({}, spec, {
+    required: Object.values(spec.map).filter(Boolean),
+  }));
+}
+
+/** Commit the mapping, then run the file through the normal import review. */
+async function saveMapping() {
+  const pending = state.pendingMapping;
+  if (!pending) return;
+  const spec = pending.spec;
+
+  for (const need of ["date", "description"]) {
+    if (!spec.map[need]) throw new Error(`Pick a column for ${need} before saving.`);
+  }
+  if (!spec.map.amount && !spec.map.debit && !spec.map.credit) {
+    throw new Error("Pick a column for the amount, or for amount out and amount in.");
+  }
+  if (!state.data) state.data = newDataFile();
+
+  state.data.column_maps[pending.signature] = JSON.parse(JSON.stringify(Object.assign({}, spec, {
+    columns: pending.header,
+    // The name typed here is what the account is called. Without this the
+    // filename fallback wins, and a mapped account ends up unnamed — and
+    // unnamed accounts do not match on the next import, so every file makes
+    // a new one and nothing ever dedups.
+    accountLabel: (spec.label || "").trim(),
+    institution: (spec.institution || spec.label || "").trim(),
+    created: new Date().toISOString(),
+  })));
+  state.dirty = true;
+
+  const { text, filename } = pending;
+  state.pendingMapping = null;
+  await beginImportFromText(text, filename);
+  toast(`Mapping saved. ${filename.split("/").pop()} and anything with these columns will import automatically from now on.`);
+}
+
+function cancelMapping() {
+  state.pendingMapping = null;
+  render();
+}
+
+/**
+ * Pick the parser that recognises this file's header row: a built-in one first,
+ * then any mapping the user has saved for these exact columns.
+ */
+function detectParser(text, data) {
+  const rows = parseCSV(text.slice(0, 8192));
   if (!rows.length) return null;
   const header = rows[0].map((h) => h.trim());
+
   for (const [id, parser] of Object.entries(PARSERS)) {
-    if (parser.matches(header)) return { id, parser, header };
+    if (parser.matches(header)) return { id, parser, header, source: "built-in" };
   }
-  return { id: null, parser: null, header };
+
+  const signature = headerSignature(header);
+  const saved = data && data.column_maps ? data.column_maps[signature] : null;
+  if (saved) {
+    return { id: MAPPED_PREFIX + signature, parser: parserFromSpec(saved),
+             header, signature, source: "saved", spec: saved };
+  }
+  return { id: null, parser: null, header, signature };
 }
 
 /** Turn a label into a stable, unique account id. */
@@ -1067,9 +1385,15 @@ function inferAccount(filename, parser) {
   const m = filename.match(/^([A-Za-z][A-Za-z ]*?)[\s_-]*(\d{4})[\s_-]*Activity/i);
   const institution = m ? m[1] : (parser ? parser.institution : "Account");
   const last4 = m ? m[2] : null;
+  // A mapping the user named carries its own label; a built-in parser derives
+  // one from the filename.
+  const label = (parser && parser.accountLabel) ||
+                (institution + (last4 ? " …" + last4 : "")).trim() ||
+                filename.replace(/\.[a-z]+$/i, "").replace(/[_-]+/g, " ").slice(0, 40) ||
+                "Account";
   return {
-    id: (institution + (last4 ? "-" + last4 : "")).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    label: institution + (last4 ? " …" + last4 : ""),
+    id: label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    label,
     institution,
     kind: parser ? parser.kind : "unknown",
   };
@@ -1077,28 +1401,32 @@ function inferAccount(filename, parser) {
 
 /** Read a statement file and stage it for review. Nothing is committed here. */
 async function beginImport(file) {
-  const text = await file.text();
-  const found = detectParser(text);
+  return beginImportFromText(await file.text(), file.name);
+}
 
-  if (!found || !found.parser) {
-    throw new Error(
-      `I don't recognise the columns in ${file.name}` +
-      (found && found.header ? ` (${found.header.slice(0, 6).join(", ")})` : "") +
-      ". Mapping columns for an unknown export is the next thing to build.");
+async function beginImportFromText(text, filename) {
+  const found = detectParser(text, state.data);
+  if (!found) throw new Error(`${filename} is empty.`);
+
+  // An unfamiliar format is not an error — it is a file we have not been told
+  // how to read yet. Ask once, remember the answer.
+  if (!found.parser) {
+    beginMapping(text, filename, found.header, found.signature);
+    return;
   }
 
-  const account = inferAccount(file.name, found.parser);
-  const result = found.parser.parse(text, file.name, account.id);
+  const account = inferAccount(filename, found.parser);
+  const result = found.parser.parse(text, filename, account.id);
   result.transactions.forEach((t) => { t.source_parser = found.id; });
   assignIds(result.transactions);
 
-  if (!result.transactions.length) throw new Error(`No readable rows in ${file.name}.`);
+  if (!result.transactions.length) throw new Error(`No readable rows in ${filename}.`);
 
   const accounts = (state.data ? state.data.accounts : []) || [];
   const existing = accounts.find((a) => a.id === account.id);
 
   state.pendingImport = {
-    filename: file.name,
+    filename,
     parserId: found.id,
     parserLabel: found.parser.label,
     parser: found.parser,
@@ -1382,9 +1710,10 @@ function sortTransactions(rows) {
  * amounts, so they net against what was spent rather than counting as income.
  */
 function totalsFor(rows) {
-  let spend = 0, transfers = 0, refunds = 0, fees = 0;
+  let spend = 0, income = 0, transfers = 0, refunds = 0, fees = 0;
   for (const tx of rows) {
     if (tx.type === "transfer") { transfers += tx.amount; continue; }
+    if (tx.type === "income") { income += tx.amount; continue; }
     spend += tx.amount;
     if (tx.amount > 0) refunds += tx.amount;
     if (tx.category === FEES_CATEGORY) fees += tx.amount;
@@ -1392,8 +1721,8 @@ function totalsFor(rows) {
   // Summing floats over hundreds of rows drifts; round to cents so a total that
   // should be zero reads as zero rather than -0.000000001.
   const cents = (n) => Math.round(n * 100) / 100;
-  return { count: rows.length, spend: cents(spend), transfers: cents(transfers),
-           refunds: cents(refunds), fees: cents(fees) };
+  return { count: rows.length, spend: cents(spend), income: cents(income),
+           transfers: cents(transfers), refunds: cents(refunds), fees: cents(fees) };
 }
 
 /** One card per account, so each card's own activity is visible at a glance. */
@@ -1546,6 +1875,7 @@ function renderTransactions() {
     el("span", {}, [plural(t.count, "transaction"), rows.length !== all.length
       ? el("span", { class: "muted", text: ` of ${all.length.toLocaleString()}` }) : null]),
     el("span", {}, ["Spending ", el("b", { class: t.spend < 0 ? "neg" : "", text: fmtMoney(t.spend) })]),
+    t.income ? el("span", {}, ["Income ", el("b", { class: "pos", text: fmtMoney(t.income) })]) : null,
     t.refunds ? el("span", {}, ["Refunds ", el("b", { class: "pos", text: fmtMoney(t.refunds) })]) : null,
     t.fees ? el("span", {}, [FEES_CATEGORY + " ", el("b", { class: "neg", text: fmtMoney(t.fees) })]) : null,
     t.transfers ? el("span", { class: "muted" }, [
@@ -1575,6 +1905,254 @@ function renderQuestions() {
     "transactions and the exact filter shown underneath.",
     true,
   ));
+}
+
+/**
+ * The column-mapping panel, shown once per unfamiliar format.
+ *
+ * Everything on it updates a live preview built with the real parser, so what
+ * you see here is exactly what will be imported.
+ */
+function renderColumnMapper() {
+  const pending = state.pendingMapping;
+  const spec = pending.spec;
+  const panel = el("div", { class: "panel" });
+  const redraw = () => { render(); };
+
+  panel.append(el("h3", { text: "Map the columns in " + pending.filename }));
+  panel.append(el("p", { class: "small muted" },
+    "This format is new. Say which column is which once — the mapping is saved " +
+    "against these exact column names and applied automatically to every future " +
+    "file from this account."));
+
+  /* -------------------------------------------------- account identity */
+  panel.append(el("div", { class: "row", style: "margin-top:12px" }, [
+    el("label", { class: "small muted", text: "Account name" }),
+    el("input", {
+      class: "text", size: "24", value: spec.label,
+      oninput: (ev) => { spec.label = ev.target.value; },
+      onchange: redraw,
+    }),
+    el("label", { class: "small muted", style: "margin-left:8px", text: "Kind" }),
+    el("select", {
+      class: "text",
+      onchange: (ev) => {
+        spec.kind = ev.target.value;
+        // On a deposit account, money in that is not a transfer is income.
+        spec.incomeWhenPositive = ev.target.value !== "credit_card";
+        redraw();
+      },
+    }, [
+      el("option", { value: "credit_card", selected: spec.kind === "credit_card", text: "Credit card" }),
+      el("option", { value: "checking",    selected: spec.kind === "checking",    text: "Checking" }),
+      el("option", { value: "savings",     selected: spec.kind === "savings",     text: "Savings" }),
+    ]),
+  ]));
+
+  /* ------------------------------------------------------ field mapping */
+  const columnOptions = (selected) =>
+    [el("option", { value: "", selected: !selected, text: "— none —" })]
+      .concat(pending.header.map((h) => el("option", { value: h, selected: h === selected, text: h })));
+
+  const sampleFor = (column) => {
+    const index = pending.header.indexOf(column);
+    if (index === -1) return "";
+    const value = (pending.sample.find((r) => (r[index] ?? "").trim()) || [])[index];
+    return (value || "").trim().slice(0, 44);
+  };
+
+  const table = el("table", { class: "tbl" }, [
+    el("thead", {}, el("tr", {}, [
+      el("th", { text: "Field" }), el("th", { text: "Column in your file" }),
+      el("th", { text: "Example value" }),
+    ])),
+    el("tbody", {}, MAPPABLE_FIELDS.map(({ field, label, required, help }) => el("tr", {}, [
+      el("td", {}, [
+        el("span", { text: label }),
+        required ? el("span", { class: "neg", text: " *" }) : null,
+        help ? el("div", { class: "small muted", text: help }) : null,
+      ]),
+      el("td", {}, el("select", {
+        class: "text",
+        onchange: (ev) => {
+          const value = ev.target.value;
+          // One column cannot be two fields; taking it releases it elsewhere.
+          for (const key of Object.keys(spec.map)) {
+            if (key !== field && spec.map[key] === value && value) delete spec.map[key];
+          }
+          if (value) spec.map[field] = value; else delete spec.map[field];
+          if (field === "amount") spec.moneyOut = guessMoneyOut(pending.header, pending.rows, value);
+          if (field === "issuer_type") {
+            pending.typeValues = typeValues(pending.header, pending.rows, value);
+            spec.transferTypes = []; spec.refundTypes = []; spec.feeTypes = [];
+          }
+          redraw();
+        },
+      }, columnOptions(spec.map[field]))),
+      el("td", { class: "desc muted", text: sampleFor(spec.map[field]) || "—" }),
+    ]))),
+  ]);
+  panel.append(el("div", { style: "margin-top:12px" }, table));
+
+  /* -------------------------------------------------- sign convention */
+  const splitting = !!(spec.map.debit || spec.map.credit) && !spec.map.amount;
+  if (splitting) {
+    panel.append(el("p", { class: "small muted", style: "margin-top:12px" },
+      "Your file puts money out and money in in separate columns, so there is no " +
+      "sign to get wrong — the column itself says the direction."));
+  } else {
+    const signRow = el("div", { class: "row", style: "margin-top:14px" }, [
+      el("strong", { class: "small", text: "Money going out is written as" }),
+    ]);
+    for (const [value, text] of [["negative", "a negative number (−$59.00)"],
+                                 ["positive", "a positive number ($59.00)"]]) {
+      signRow.append(el("label", { class: "small" }, [
+        el("input", {
+          type: "radio", name: "moneyOut", checked: spec.moneyOut === value,
+          onchange: () => { spec.moneyOut = value; redraw(); },
+        }),
+        " " + text,
+      ]));
+    }
+    panel.append(signRow);
+    panel.append(el("p", { class: "small muted", style: "margin-top:4px" },
+      "Issuers disagree about this, so check the preview below: ordinary purchases " +
+      "must come out red and negative."));
+  }
+
+  /* ----------------------------------------------------- row type roles */
+  if (spec.map.issuer_type && pending.typeValues.length) {
+    panel.append(el("h3", { style: "margin-top:16px", text: `What the "${spec.map.issuer_type}" values mean` }));
+    panel.append(el("p", { class: "small muted" },
+      "Tick anything that is a payment to this account, a refund, or interest and fees. " +
+      "Payments are excluded from spending; refunds reduce a category instead of " +
+      "counting as income; fees get their own category."));
+
+    const roles = [["transferTypes", "Transfer"], ["refundTypes", "Refund"], ["feeTypes", "Fee / interest"]];
+
+    /** One checkbox. A row is one thing, so taking a role releases the others. */
+    const roleBox = (bucket, value) => el("input", {
+      type: "checkbox",
+      checked: spec[bucket].includes(value),
+      onchange: (ev) => {
+        for (const [other] of roles) spec[other] = spec[other].filter((v) => v !== value);
+        if (ev.target.checked) spec[bucket] = spec[bucket].concat([value]);
+        redraw();
+      },
+    });
+
+    const headerCells = [el("th", { text: "Value" }), el("th", { text: "Rows" })];
+    for (const [, label] of roles) headerCells.push(el("th", { text: label }));
+
+    const bodyRows = pending.typeValues.map(([value, count]) => {
+      const cells = [
+        el("td", { class: "desc", text: value }),
+        el("td", { class: "num", text: String(count) }),
+      ];
+      for (const [bucket] of roles) cells.push(el("td", {}, roleBox(bucket, value)));
+      return el("tr", {}, cells);
+    });
+
+    panel.append(el("div", { class: "scroll", style: "margin-top:8px;max-height:220px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, headerCells)),
+        el("tbody", {}, bodyRows),
+      ])));
+  }
+
+  /* -------------------------------------------------------- live preview */
+  const hasMoney = !!(spec.map.amount || spec.map.debit || spec.map.credit);
+  let preview = null, error = null;
+  if (spec.map.date && spec.map.description && hasMoney) {
+    try {
+      preview = parserFromSpec(spec).parse(pending.text, pending.filename, "preview");
+    } catch (err) { error = err.message; }
+  }
+
+  panel.append(el("h3", { style: "margin-top:16px", text: "Preview" }));
+  if (error) {
+    panel.append(el("div", { class: "note warn" }, [el("strong", { text: "Cannot parse yet." }), error]));
+  } else if (!preview) {
+    panel.append(el("p", { class: "small muted" },
+      "Pick a column for date, description, and the amount (or amount out / amount in)."));
+  } else {
+    const rows = preview.transactions;
+    const t = totalsFor(rows);
+    panel.append(el("div", { class: "summary-line", style: "border-top:0" }, [
+      el("span", {}, [plural(rows.length, "row"), " parsed"]),
+      el("span", {}, ["Spending ", el("b", { class: t.spend < 0 ? "neg" : "", text: fmtMoney(t.spend) })]),
+      t.income ? el("span", {}, ["Income ", el("b", { class: "pos", text: fmtMoney(t.income) })]) : null,
+      t.transfers ? el("span", { class: "muted" }, ["Transfers ", el("b", { text: fmtMoney(t.transfers) })]) : null,
+      preview.problems.length
+        ? el("span", { class: "neg", text: `${preview.problems.length} unreadable` }) : null,
+    ]));
+
+    const positives = rows.filter((r) => r.type === "expense" && r.amount > 0).length;
+    if (rows.length && positives / rows.length > 0.5) {
+      panel.append(el("div", { class: "note warn" }, [
+        el("strong", { text: "Most rows are coming out positive." }),
+        "That usually means the sign setting above is the wrong way round.",
+      ]));
+    }
+
+    panel.append(el("div", { class: "scroll", style: "margin-top:8px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "Date" }), el("th", { text: "Description" }),
+          el("th", { text: "Type" }), el("th", { text: "Amount", style: "text-align:right" }),
+        ])),
+        el("tbody", {}, rows.slice(0, 12).map((tx) => el("tr", {}, [
+          el("td", { class: "date", text: tx.date }),
+          el("td", { class: "desc", title: tx.description, text: tx.merchant || tx.description }),
+          el("td", {}, el("span", {
+            class: "tag" + (tx.type === "transfer" ? " transfer" : tx.amount > 0 ? " refund" : ""),
+            text: tx.type,
+          })),
+          el("td", { class: "num " + (tx.amount < 0 ? "neg" : "pos"), text: fmtMoney(tx.amount) }),
+        ]))),
+      ])));
+  }
+
+  panel.append(el("div", { class: "row", style: "margin-top:14px" }, [
+    el("button", {
+      class: "btn primary",
+      disabled: !preview || !!error,
+      onclick: () => run(saveMapping),
+    }, "Save mapping and continue"),
+    el("button", { class: "btn", onclick: cancelMapping }, "Cancel"),
+  ]));
+
+  return panel;
+}
+
+/** Mappings the user has saved, so they can be reviewed or removed. */
+function renderSavedMappings() {
+  const maps = Object.entries((state.data && state.data.column_maps) || {});
+  if (!maps.length) return null;
+
+  return el("details", { class: "panel" }, [
+    el("summary", { class: "small muted", text: `Saved column mappings (${maps.length})` }),
+    el("table", { class: "tbl", style: "margin-top:8px" }, [
+      el("thead", {}, el("tr", {}, [
+        el("th", { text: "Account" }), el("th", { text: "Kind" }),
+        el("th", { text: "Columns" }), el("th", { text: "" }),
+      ])),
+      el("tbody", {}, maps.map(([signature, spec]) => el("tr", {}, [
+        el("td", { text: spec.label || "—" }),
+        el("td", { class: "small muted", text: spec.kind }),
+        el("td", { class: "desc", title: (spec.columns || []).join(", "),
+                   text: (spec.columns || []).join(", ") }),
+        el("td", {}, el("button", {
+          class: "btn link",
+          onclick: () => {
+            delete state.data.column_maps[signature];
+            state.dirty = true;
+            run(saveNow);
+          },
+        }, "forget")),
+      ]))),
+    ]),
+  ]);
 }
 
 /** The staged-import review panel: what came out of the file, before committing. */
@@ -1736,6 +2314,7 @@ function renderDataView() {
   body.textContent = "";
   const s = summary();
 
+  if (state.pendingMapping) { body.append(renderColumnMapper()); return; }
   if (state.pendingImport) { body.append(renderImportPreview()); return; }
 
   /* --- not connected to anything yet ------------------------------------ */
@@ -1814,6 +2393,8 @@ function renderDataView() {
   body.append(cols);
 
   if (state.lastImport) body.append(renderLastImport());
+  const saved = renderSavedMappings();
+  if (saved) body.append(saved);
 
   body.append(el("div", { class: "panel" }, [
     el("h3", { text: "How this runs" }),
@@ -2032,6 +2613,15 @@ window.__finance = {
   detectParser,
   inferAccount,
   accountIdFrom,
+  // column mapper
+  TYPE_GUESS,
+  headerSignature,
+  guessMapping,
+  guessMoneyOut,
+  typeValues,
+  parserFromSpec,
+  makeCsvParser,
+  allParsers,
   // build step 3
   resolveCategory,
   recategorizeAll,

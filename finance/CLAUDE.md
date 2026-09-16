@@ -200,6 +200,12 @@ import and after **any** rule or override change — that is what makes "change 
 rule and the whole history updates" true rather than aspirational. Never write a
 category anywhere except through this function.
 
+On a deposit account (`kind` of `checking` or `savings`, which sets
+`incomeWhenPositive`), money in that is not a transfer and not a refund is
+`income`. On a credit card money in is a payment or a refund, never income, so
+the flag stays false there. `totalsFor()` keeps income out of `spend` entirely —
+income is not negative spending.
+
 **Interest and fees get their own category** (`Interest & Fees`), by explicit
 request. They are real expenses and stay in spending totals, but they are not
 merchant spending, so burying them in a merchant bucket misrepresents both. Each
@@ -264,8 +270,46 @@ Each institution gets its own small parser. Keep them uniform:
   checked — importing a year of expenses backwards is silent and ruinous.
 - Dates to ISO `YYYY-MM-DD` at the parser boundary too.
 - Do not trim, case-fold or clean `description`. Copy it verbatim.
-- Unknown CSV shape: show the user the columns, let them map once, save the
-  mapping under `column_maps` keyed by a signature of the header row.
+### Unknown formats: the column mapper
+
+An unfamiliar CSV is not an error. `beginImportFromText` falls through to
+`beginMapping`, which shows every column with an example value and lets the user
+say which is which, once. The mapping is stored in `column_maps` under
+`headerSignature(header)` — a hash of the lower-cased column names — so the next
+file with the same columns is recognised with no prompt.
+
+`detectParser(text, data)` checks built-in parsers first, then saved mappings. A
+built-in always wins; a mapping can never shadow one.
+
+A saved mapping is just a `makeCsvParser` spec plus `columns`, `accountLabel`
+and `created`. `allParsers(data)` rebuilds them all so a mapped parser is a
+first-class parser everywhere — including `resolveCategory`, which is why fees
+on a mapped account still reach `Interest & Fees`. Mapped parser ids are
+prefixed `map:`.
+
+**Two money shapes.** One signed `amount` column, or a `debit`/`credit` pair
+where the column itself carries the direction (Citi-issued store cards do this).
+With a pair, magnitudes are taken and `amount = |credit| − |debit|`, so the sign
+question does not arise and `moneyOut` does not apply. `splitAmounts` is true in
+that case and the sign-verification pass is skipped.
+
+**Guessing row-type roles must be token-based, never substring.** This bit a
+real file: a bank type of `ACH_CREDIT` is a paycheck, but it contains "credit",
+so a substring rule called it a refund and $3,200 of income turned into a
+positive "expense" — spending for the account came out above zero. `ACH_DEBIT`
+and `DEPOSIT` have the same problem with "transfer". `TYPE_GUESS` therefore
+splits the value into word tokens and keeps the lists short, and bare `Credit`
+is the only whole-value special case.
+
+Lean towards leaving a row visible. A row in the wrong bucket that still shows
+up is easy to spot and retick; one silently excluded from every total is not.
+Everything here is a suggestion anyway — the panel shows each type with its row
+count, and a live preview built with the real parser, before anything is saved.
+
+The account name typed in the mapper becomes `accountLabel`, which
+`inferAccount` prefers over anything derived from the filename. Without that a
+mapped account comes out unnamed, and unnamed accounts do not match on the next
+import — so every file makes a new account and nothing ever dedups.
 
 Formats, in priority order: CSV (the main path), QFX/OFX (cleaner, worth it if
 cheap), PDF (best effort via pdf.js from CDN — show extracted rows for review
@@ -360,7 +404,7 @@ Working vertical slices, stopping after each so the user can try it.
 1. ✅ HTML shell, launcher, data file load/save, empty state.
 2. ✅ One CSV parser for one account, plus dedup, importing into the data model.
 3. ✅ Transaction table with filters, separated by account.
-4. ⬜ Categorization rules and the overrides UI.
+4. ⬜ Categorization rules and the overrides UI. **Next.**
 5. ⬜ Transfer and refund handling.
 6. ⬜ Overview dashboard with drill-down.
 7. ⬜ Preset questions.
@@ -407,10 +451,18 @@ because several cards are in play and two may be the same institution. Changing
 the account re-stages the import — the account is part of the dedup hash, so
 every id changes with it.
 
-**More accounts are coming**: a second bank card, three store cards, a personal
-checking account, and a spouse's cards. Nothing may assume a fixed number of
-accounts or a single person. Apple's `Purchased By` column is already captured
-as `purchased_by` for exactly that reason.
+**More accounts are coming**: three store cards, a personal checking account,
+and a spouse's cards. Nothing may assume a fixed number of accounts or a single
+person. Apple's `Purchased By` column is already captured as `purchased_by` for
+exactly that reason.
+
+**A spouse's cards are separate accounts**, decided explicitly. Each card is its
+own account with its own card in the strip; "All accounts" is the household
+view. Do not build a per-person grouping unless asked — `purchased_by` already
+covers who spent what on a shared card.
+
+**"Personal Account" is the checking account**, `kind: "checking"`. It is the
+other side of every card payment and the only place income appears.
 
 ## Open questions — ask, do not assume
 
@@ -418,12 +470,8 @@ as `purchased_by` for exactly that reason.
   card payment, and the only place income appears. Chase checking CSV has a
   different header from the card (`Details, Posting Date, Description, Amount,
   Type, Balance, Check or Slip #`), so it needs its own declaration.
-- **The generic column mapper.** Store cards and a spouse's cards are coming,
-  each a new format. The spec calls for showing the user the columns and letting
-  them map once, saved under `column_maps`. Until that exists every new
-  institution needs a declaration added by hand. This is the highest-value thing
-  left before the account list grows.
-- **Whether a spouse's cards are separate accounts or one household view.**
-  Both are reasonable; ask before assuming.
+- **Whether a recurring store-card format deserves promoting** from a saved
+  mapping to a built-in parser. A mapping works fine; a built-in is only worth
+  it when the format needs handling a declaration cannot express.
 - **Whether a given pattern is a transfer.** Always confirm before classifying.
 - **Anything that would send data off the machine.** Ask first, every time.
