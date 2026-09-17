@@ -579,6 +579,35 @@ is checked both ways: it fails against the pre-fix file and passes after.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
+### Questions (build step 7)
+
+Five preset questions, each one card: the question in plain words, one number
+as the answer, a sentence saying exactly which rows produced it, and a way
+straight into those rows. The rule the rest of the app follows applies hardest
+here — **a figure you cannot audit is worse than no figure** — so every card's
+`filter` is the same object `drillTo()` takes, and the browser test proves the
+drill-through returns exactly the rows counted and the same total to the cent.
+
+The questions: what interest and fees cost per month (broken down per account,
+because that is the one people actually want to act on), what a category costs
+per month, what comes in against what goes out, what the standing monthly
+commitments are, and what the biggest single charges were. A window control
+(3 / 6 / 12 / 24 / all) applies to all of them.
+
+`recentMonths()` never invents months: the window is months that have data, so
+a 12-month question on a 5-month file answers over 5 months and says so. Per-
+month figures divide by that count, not by 12.
+
+**The card that says what is missing.** `uncategorizedShare()` reports how much
+of the spending in the window has no category, in dollars and as a percentage,
+and the view prints it under the answers. Category-based answers are short by
+exactly that much, and a finance app that quietly reports a too-small number is
+the failure this whole thing exists to avoid.
+
+The category question offers only the user's own names — "Interest & Fees" has
+its own card and "Transfer" is not spending — and when there are no such names
+yet, it says what to do rather than showing an empty dropdown.
+
 ### One payee, two schedules
 
 A mortgage and a home-equity loan from the same lender print the same
@@ -741,8 +770,8 @@ Working vertical slices, stopping after each so the user can try it.
    ➕ Recurring-charge detection, added out of order: the first real user asked
    for it within an hour of using the app, and it needs no categories to work.
 6. ✅ Overview dashboard with drill-down.
-7. ⬜ Preset questions. **Next.**
-8. ⬜ Optional natural language layer.
+7. ✅ Preset questions.
+8. ⬜ Optional natural language layer. **Next, if wanted.**
 
 Update `buildSteps()` in `finances.html` (the `doneThrough` constant) as each
 slice lands, and tick the box here.

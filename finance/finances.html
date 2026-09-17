@@ -324,6 +324,11 @@ th .arrow { opacity: .6; font-size: 9px; }
 .warnish { color: var(--warn); font-weight: 600; }
 
 /* ------------------------------------------------------------ stat tiles */
+.question .answer { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 2px; }
+.question .big {
+  font: 600 26px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
 .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .stat {
   appearance: none; font: inherit; color: inherit; text-align: left;
@@ -579,7 +584,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.9.2";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.10.0";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -609,6 +614,7 @@ const state = {
   backlogLimit: 40,    // uncategorized merchants shown before "show more"
   overview: { month: "", account: "" },
   recurring: { show: "active" },
+  questions: { months: 12, category: "" },
   confirmRemove: null, // account id armed for removal, awaiting a second click
   selected: new Set(), // transaction ids ticked for a bulk change
   suggestRule: null,   // { match, category, count } offered after a manual recategorize
@@ -2117,7 +2123,7 @@ function buildSteps() {
     "Preset questions",
     "Optional natural-language layer",
   ];
-  const doneThrough = 6;  // update as each slice lands
+  const doneThrough = 7;  // update as each slice lands
   return el("ul", { class: "steps" }, steps.map((label, i) => el("li", {
     class: i < doneThrough ? "done" : i === doneThrough ? "next" : "",
     text: `${i + 1}. ${label}`,
@@ -2245,6 +2251,142 @@ function drillTo(filters) {
   state.selected.clear();
   state.suggestRule = null;
   switchView("transactions");   // re-renders with the new filters
+}
+
+/* ================================================== questions (build step 7)
+ *
+ * A question is answered from the rows on this machine and nowhere else. Each
+ * answer carries the exact filter it used, so every number opens the
+ * transactions behind it — a figure you cannot audit is worse than no figure.
+ * ======================================================================== */
+
+/** The last `count` months that have data, with a window to drill into. */
+function recentMonths(data, count) {
+  const months = monthsWithData(data).slice(-Math.max(1, count));
+  return {
+    months,
+    from: months.length ? monthStart(months[0]) : "",
+    to: months.length ? monthEnd(months[months.length - 1]) : "",
+  };
+}
+
+/** What a set of rows comes to, and what that is per month across a window. */
+function perMonthAverage(rows, monthCount) {
+  const total = rows.reduce((sum, t) => sum + t.amount, 0);
+  const round = (n) => Math.round(n * 100) / 100;
+  return {
+    count: rows.length,
+    total: round(total),
+    perMonth: monthCount ? round(total / monthCount) : 0,
+    perYear: monthCount ? round((total / monthCount) * 12) : 0,
+  };
+}
+
+/** Rows grouped by account, biggest first, each with its own per-month figure. */
+function byAccount(rows, monthCount) {
+  const groups = new Map();
+  for (const tx of rows) {
+    if (!groups.has(tx.account)) groups.set(tx.account, []);
+    groups.get(tx.account).push(tx);
+  }
+  return [...groups.entries()]
+    .map(([account, list]) => ({ account, rows: list, ...perMonthAverage(list, monthCount) }))
+    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+}
+
+/**
+ * How much interest and fees are costing, per month.
+ *
+ * Counted from the Interest & Fees category rather than by searching the text:
+ * the category is what the issuer's own row type says, or what a rule says, and
+ * it is the same number the rest of the app uses.
+ */
+function answerInterestAndFees(data, count) {
+  const window = recentMonths(data, count || 12);
+  const rows = (data ? data.transactions : []).filter((tx) =>
+    tx.category === FEES_CATEGORY && tx.date >= window.from && tx.date <= window.to);
+  const monthly = window.months.map((month) => ({
+    month,
+    total: Math.round(rows.filter((t) => monthOf(t.date) === month)
+      .reduce((sum, t) => sum + t.amount, 0) * 100) / 100,
+  }));
+  return {
+    ...window,
+    rows,
+    monthly,
+    accounts: byAccount(rows, window.months.length),
+    ...perMonthAverage(rows, window.months.length),
+    filter: { category: FEES_CATEGORY, from: window.from, to: window.to },
+  };
+}
+
+/** How much a category costs per month, over the same kind of window. */
+function answerCategorySpend(data, category, count) {
+  const window = recentMonths(data, count || 12);
+  const rows = (data ? data.transactions : []).filter((tx) =>
+    tx.category === category && tx.type !== "transfer" && tx.type !== "income" &&
+    tx.date >= window.from && tx.date <= window.to);
+  const monthly = window.months.map((month) => ({
+    month,
+    total: Math.round(rows.filter((t) => monthOf(t.date) === month)
+      .reduce((sum, t) => sum + t.amount, 0) * 100) / 100,
+  }));
+  return {
+    ...window, rows, monthly, category,
+    accounts: byAccount(rows, window.months.length),
+    ...perMonthAverage(rows, window.months.length),
+    filter: { category, from: window.from, to: window.to },
+  };
+}
+
+/** Money in against money out, per month, for the same window. */
+function answerInOut(data, count) {
+  const window = recentMonths(data, count || 12);
+  const rows = (data ? data.transactions : []).filter(
+    (tx) => tx.date >= window.from && tx.date <= window.to);
+  const totals = totalsFor(rows);
+  const months = window.months.length || 1;
+  const round = (n) => Math.round(n * 100) / 100;
+  return {
+    ...window,
+    income: totals.income,
+    spend: totals.spend,
+    net: round(totals.income + totals.spend),
+    incomePerMonth: round(totals.income / months),
+    spendPerMonth: round(totals.spend / months),
+    netPerMonth: round((totals.income + totals.spend) / months),
+    monthly: window.months.map((month) => {
+      const t = totalsFor(overviewRows(data, { month }));
+      return { month, income: t.income, spend: t.spend, net: round(t.income + t.spend) };
+    }),
+  };
+}
+
+/** The largest single charges in the window — one-offs the averages hide. */
+function answerBiggestCharges(data, count, limit) {
+  const window = recentMonths(data, count || 12);
+  const rows = (data ? data.transactions : []).filter((tx) =>
+    tx.type === "expense" && tx.amount < 0 &&
+    tx.date >= window.from && tx.date <= window.to);
+  return {
+    ...window,
+    rows: rows.sort((a, b) => a.amount - b.amount).slice(0, limit || 10),
+    total: Math.round(rows.reduce((sum, t) => sum + t.amount, 0) * 100) / 100,
+  };
+}
+
+/** How much of the answer is built on rows nobody has named yet. */
+function uncategorizedShare(data, from, to) {
+  const rows = (data ? data.transactions : []).filter((tx) =>
+    tx.type === "expense" && tx.date >= from && tx.date <= to);
+  const loose = rows.filter((tx) => !tx.category || tx.category === UNCATEGORIZED);
+  const spend = rows.reduce((sum, t) => sum + t.amount, 0);
+  const looseSpend = loose.reduce((sum, t) => sum + t.amount, 0);
+  return {
+    count: loose.length,
+    total: Math.round(looseSpend * 100) / 100,
+    share: spend ? Math.round((looseSpend / spend) * 100) : 0,
+  };
 }
 
 /* ---------------------------------------------------- overview: rendering */
@@ -3962,16 +4104,227 @@ function renderCategorize() {
   body.append(cols);
 }
 
+/**
+ * Preset questions, answered from the rows on this machine.
+ *
+ * Each card is a question in plain words, one number as the answer, the exact
+ * window and filter that produced it, and a way straight to the transactions
+ * behind it. Nothing here leaves the machine and nothing is estimated: if the
+ * answer rests on rows nobody has categorized yet, the card says so rather than
+ * quietly reporting a number that is too low.
+ */
 function renderQuestions() {
   const body = $("#questions-body");
   body.textContent = "";
-  body.append(emptyState(
-    "Questions need data first",
-    "Once transactions are in, this is where you ask things like “how much do we spend on " +
-    "gas in a month?” — answered from the data on this machine, with the matching " +
-    "transactions and the exact filter shown underneath.",
-    true,
-  ));
+  const data = state.data;
+
+  if (!data || !data.transactions.length) {
+    body.append(emptyState(
+      "Questions need data first",
+      "Once transactions are in, this is where you ask things like \u201chow much do we spend on " +
+      "gas in a month?\u201d \u2014 answered from the data on this machine, with the matching " +
+      "transactions and the exact filter shown underneath.",
+      true,
+    ));
+    return;
+  }
+
+  const months = monthsWithData(data);
+  const wanted = Math.min(state.questions.months, months.length);
+  const windowLabel = (a) => `${monthLabel(a.months[0], true)} \u2013 ` +
+    `${monthLabel(a.months[a.months.length - 1], true)}` +
+    ` (${plural(a.months.length, "month")})`;
+
+  /* ------------------------------------------------------------ controls */
+  const bar = el("div", { class: "filters" }, [
+    el("label", { text: "Look back over" }),
+    el("select", {
+      onchange: (ev) => { state.questions.months = Number(ev.target.value); renderQuestions(); },
+    }, [3, 6, 12, 24, 120].filter((n, i, all) => n <= months.length || all[i - 1] < months.length)
+        .map((n) => el("option", {
+          value: n, selected: state.questions.months === n,
+          text: n >= months.length ? `all ${plural(months.length, "month")}` : `the last ${n} months`,
+        }))),
+  ]);
+  body.append(bar);
+
+  /** One question: a heading, the number, how it was worked out, a way in. */
+  const card = ({ question, value, tone, sub, how, onclick, extra }) => {
+    const panel = el("div", { class: "panel question" });
+    panel.append(el("h3", { text: question }));
+    panel.append(el("div", { class: "answer" }, [
+      el("span", { class: "big " + (tone || ""), text: value }),
+      sub ? el("span", { class: "small muted", text: sub }) : null,
+    ]));
+    if (how) panel.append(el("p", { class: "small muted", text: how }));
+    if (extra) panel.append(extra);
+    if (onclick) {
+      panel.append(el("button", { class: "btn link", onclick }, "Show me the transactions \u2192"));
+    }
+    return panel;
+  };
+
+  /* ------------------------------------- what are the cards actually made of */
+  const fees = answerInterestAndFees(data, wanted);
+  const loose = uncategorizedShare(data, fees.from, fees.to);
+
+  const feeTable = () => {
+    if (!fees.rows.length) return null;
+    const rows = fees.accounts.map((entry) => el("tr", {}, [
+      el("td", { class: "small", text: accountLabel(entry.account) }),
+      el("td", { class: "num", text: entry.count.toLocaleString() }),
+      el("td", { class: "num neg", text: fmtMoney(entry.perMonth) }),
+      el("td", { class: "num neg", text: fmtMoney(entry.total) }),
+      el("td", {}, el("button", {
+        class: "btn link",
+        onclick: () => drillTo({ ...fees.filter, account: entry.account }),
+      }, "open")),
+    ]));
+    return el("div", { class: "scroll", style: "margin-top:8px;max-height:280px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "Account" }), el("th", { text: "Charges" }),
+          el("th", { text: "Per month" }), el("th", { text: "In total" }), el("th", {}),
+        ])),
+        el("tbody", {}, rows),
+      ]));
+  };
+
+  body.append(card({
+    question: "How much are we paying a month in interest and fees?",
+    value: fmtMoney(fees.perMonth),
+    tone: fees.perMonth < 0 ? "neg" : "",
+    sub: fees.total ? `${fmtMoney(fees.total)} over ${windowLabel(fees)}` : "nothing found",
+    how: fees.rows.length
+      ? `Every row in \u201c${FEES_CATEGORY}\u201d between ${fees.from} and ${fees.to} ` +
+        `\u2014 ${plural(fees.rows.length, "charge")} across ` +
+        `${plural(fees.accounts.length, "account")}. That is ${fmtMoney(fees.perYear)} a year ` +
+        `at this rate.`
+      : `No rows are in \u201c${FEES_CATEGORY}\u201d yet. Card exports that name their own row ` +
+        `types land there automatically; for exports that do not, give those rows the ` +
+        `\u201c${FEES_CATEGORY}\u201d category in Categorize and this fills in.`,
+    extra: feeTable(),
+    onclick: fees.rows.length ? () => drillTo(fees.filter) : null,
+  }));
+
+  /* ----------------------------------------------- what a category costs */
+  // Only your own categories: "Interest & Fees" has its own card above and
+  // "Transfer" is not spending, so offering either here would answer twice.
+  const categories = (data.categories || [])
+    .filter((c) => c !== FEES_CATEGORY && c !== TRANSFER_CATEGORY && c !== UNCATEGORIZED)
+    .slice().sort();
+  if (!categories.includes(state.questions.category)) state.questions.category = categories[0] || "";
+  if (state.questions.category) {
+    const pick = answerCategorySpend(data, state.questions.category, wanted);
+    const picker = el("select", {
+      onchange: (ev) => { state.questions.category = ev.target.value; renderQuestions(); },
+    }, categories.map((c) => el("option", {
+      value: c, selected: c === state.questions.category, text: c,
+    })));
+    const row = el("div", { class: "row", style: "margin-top:6px" },
+      [el("label", { class: "small muted", text: "Category" }), picker]);
+
+    body.append(card({
+      question: "What do we spend a month on \u2026?",
+      value: fmtMoney(pick.perMonth),
+      tone: pick.perMonth < 0 ? "neg" : "",
+      sub: `${fmtMoney(pick.total)} over ${windowLabel(pick)}`,
+      how: `${plural(pick.rows.length, "transaction")} categorized ` +
+        `\u201c${pick.category}\u201d between ${pick.from} and ${pick.to}. ` +
+        `Transfers and income are never counted as spending.`,
+      extra: row,
+      onclick: pick.rows.length ? () => drillTo(pick.filter) : null,
+    }));
+  }
+
+  if (!categories.length) {
+    body.append(el("div", { class: "panel question" }, [
+      el("h3", { text: "What do we spend a month on \u2026?" }),
+      el("p", { class: "small muted" },
+        "This one needs categories of your own first. Name a few merchants in Categorize " +
+        "\u2014 the biggest are at the top \u2014 and each name you use appears here."),
+      el("button", { class: "btn link", onclick: () => switchView("categorize") },
+        "Go to Categorize \u2192"),
+    ]));
+  }
+
+  /* ------------------------------------------------ in against out */
+  const flow = answerInOut(data, wanted);
+  if (flow.income) {
+    body.append(card({
+      question: "How much comes in against what goes out?",
+      value: fmtMoney(flow.netPerMonth) + " a month",
+      tone: flow.netPerMonth >= 0 ? "pos" : "neg",
+      sub: `${fmtMoney(flow.incomePerMonth)} in, ${fmtMoney(flow.spendPerMonth)} out`,
+      how: `Everything between ${flow.from} and ${flow.to}, ` +
+        `${plural(flow.months.length, "month")} of it. Money moved between your own accounts ` +
+        `is left out of both sides \u2014 it is not income and it is not spending.`,
+      onclick: () => drillTo({ from: flow.from, to: flow.to }),
+    }));
+  }
+
+  /* --------------------------------------------- the standing commitments */
+  const recurring = recurringCharges(data);
+  const run = recurringTotals(recurring);
+  if (run.count) {
+    body.append(card({
+      question: "What are we committed to every month?",
+      value: fmtMoney(-run.perMonth),
+      tone: "neg",
+      sub: `${plural(run.count, "repeating charge")}, ${fmtMoney(-run.perYear)} a year`,
+      how: `Charges that repeat on a steady beat \u2014 monthly, four-weekly, quarterly or ` +
+        `yearly \u2014 priced from their most recent charges rather than their all-time average.` +
+        (run.lapsed
+          ? ` ${plural(run.lapsed, "other")} ${run.lapsed === 1 ? "looks" : "look"} ` +
+            `to have stopped.`
+          : ""),
+      onclick: () => switchView("recurring"),
+    }));
+  }
+
+  /* ------------------------------------------------- the one-off outliers */
+  const big = answerBiggestCharges(data, wanted, 8);
+  if (big.rows.length) {
+    const list = el("div", { class: "scroll", style: "margin-top:8px;max-height:260px" },
+      el("table", { class: "tbl" }, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "Date" }), el("th", { text: "Description" }),
+          el("th", { text: "Account" }), el("th", { text: "Category" }),
+          el("th", { class: "num", text: "Amount" }),
+        ])),
+        el("tbody", {}, big.rows.map((tx) => el("tr", {}, [
+          el("td", { class: "date", text: tx.date }),
+          el("td", { class: "desc", title: tx.description,
+                     text: tx.merchant || tx.description }),
+          el("td", { class: "small muted", text: accountLabel(tx.account) }),
+          el("td", { class: "small muted", text: tx.category }),
+          el("td", { class: "num neg", text: fmtMoney(tx.amount) }),
+        ]))),
+      ]));
+    body.append(card({
+      question: "What were the biggest single charges?",
+      value: fmtMoney(big.rows[0].amount),
+      tone: "neg",
+      sub: `the largest of the ${big.rows.length} shown`,
+      how: `Single expenses between ${big.from} and ${big.to}, largest first. Averages hide ` +
+        `these, and one of them is often the reason a month looks wrong.`,
+      extra: list,
+      onclick: () => drillTo({ from: big.from, to: big.to, type: "expense" }),
+    }));
+  }
+
+  /* ------------------------------------------- how much of this is guesswork */
+  if (loose.count) {
+    body.append(el("div", { class: "note warn" }, [
+      el("strong", { text: `${loose.count.toLocaleString()} transactions in this window are ` +
+        `not categorized yet \u2014 ${fmtMoney(loose.total)}, ${Math.abs(loose.share)}% of ` +
+        `spending.` }),
+      "Answers that rest on categories are that much short until they are named. " +
+      "The Categorize tab works biggest-first, so a few minutes there moves most of this.",
+      el("button", { class: "btn link", onclick: () => switchView("categorize") },
+        "Go to Categorize \u2192"),
+    ]));
+  }
 }
 
 /**
@@ -4842,6 +5195,14 @@ window.__finance = {
   categorySlot,
   recurringCharges,
   amountBands,
+  recentMonths,
+  perMonthAverage,
+  byAccount,
+  answerInterestAndFees,
+  answerCategorySpend,
+  answerInOut,
+  answerBiggestCharges,
+  uncategorizedShare,
   upcomingCharges,
   recurringTotals,
   daysBetween,

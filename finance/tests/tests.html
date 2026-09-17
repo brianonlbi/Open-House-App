@@ -1705,6 +1705,124 @@ async function run(API) {
     ok("and it is still there", !!data.column_maps.sig);
   }
 
+  describe("questions: how much a month in interest and fees");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "a", label: "Card A", kind: "credit_card" },
+                 { id: "b", label: "Card B", kind: "credit_card" }],
+      transactions: [
+        { id: "1", date: "2026-01-20", amount: -30, type: "expense", account: "a",
+          description: "SAMPLE INTEREST", issuer_type: "Fee", category: "Interest & Fees" },
+        { id: "2", date: "2026-02-20", amount: -40, type: "expense", account: "a",
+          description: "SAMPLE INTEREST", issuer_type: "Fee", category: "Interest & Fees" },
+        { id: "3", date: "2026-03-20", amount: -50, type: "expense", account: "b",
+          description: "SAMPLE INTEREST", issuer_type: "Fee", category: "Interest & Fees" },
+        { id: "4", date: "2026-03-05", amount: -200, type: "expense", account: "a",
+          description: "SAMPLE SHOP", category: "Shopping" },
+        { id: "5", date: "2026-03-06", amount: 500, type: "transfer", account: "a",
+          description: "SAMPLE PAYMENT", category: "Transfer" },
+      ],
+    });
+
+    const a = API.answerInterestAndFees(data, 12);
+    eq("three months of data", a.months.length, 3);
+    eq("only fee rows are counted", a.rows.length, 3);
+    eq("the total is their total", a.total, -120);
+    eq("per month is that over the months", a.perMonth, -40);
+    eq("and a year at that rate", a.perYear, -480);
+    eq("split across the cards", a.accounts.length, 2);
+    eq("biggest first", a.accounts[0].account, "a");
+    eq("with its own share", a.accounts[0].total, -70);
+    eq("the window starts at the first month", a.from, "2026-01-01");
+    eq("and ends at the last", a.to, "2026-03-31");
+    eq("the filter says exactly what was counted", a.filter.category, "Interest & Fees");
+
+    // The filter has to reproduce the number, or the answer is unauditable.
+    const behind = data.transactions.filter((t) =>
+      t.category === a.filter.category && t.date >= a.filter.from && t.date <= a.filter.to);
+    eq("the filter finds the same rows", behind.length, a.rows.length);
+    eq("and the same money", API.totalsFor(behind).spend, a.total);
+
+    const short = API.answerInterestAndFees(data, 1);
+    eq("a shorter window is a different question", short.months.length, 1);
+    eq("counting only that month", short.total, -50);
+
+    eq("a file with no fees answers zero, not nothing",
+       API.answerInterestAndFees(API.migrate({ transactions: [
+         { id: "x", date: "2026-01-01", amount: -9, type: "expense", account: "a",
+           description: "SAMPLE" }] }), 12).total, 0);
+  }
+
+  describe("questions: what a category costs, and what comes in against what goes out");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "chk", label: "Checking", kind: "checking" }],
+      transactions: [
+        { id: "1", date: "2026-01-10", amount: -60, type: "expense", account: "chk",
+          description: "SAMPLE FUEL", category: "Gas" },
+        { id: "2", date: "2026-02-10", amount: -40, type: "expense", account: "chk",
+          description: "SAMPLE FUEL", category: "Gas" },
+        { id: "3", date: "2026-02-11", amount: -25, type: "expense", account: "chk",
+          description: "SAMPLE SHOP", category: "Groceries" },
+        { id: "4", date: "2026-01-01", amount: 2000, type: "income", account: "chk",
+          description: "SAMPLE PAY", category: "Income" },
+        { id: "5", date: "2026-02-01", amount: 2000, type: "income", account: "chk",
+          description: "SAMPLE PAY", category: "Income" },
+        { id: "6", date: "2026-02-02", amount: -500, type: "transfer", account: "chk",
+          description: "SAMPLE CARD PAYMENT", category: "Transfer" },
+      ],
+    });
+
+    const gas = API.answerCategorySpend(data, "Gas", 12);
+    eq("only that category", gas.rows.length, 2);
+    eq("its total", gas.total, -100);
+    eq("per month across the window", gas.perMonth, -50);
+    eq("a category nobody uses answers zero",
+       API.answerCategorySpend(data, "Travel", 12).total, 0);
+
+    const flow = API.answerInOut(data, 12);
+    eq("income is income", flow.income, 4000);
+    eq("spending excludes the transfer", flow.spend, -125);
+    eq("net is what is left", flow.net, 3875);
+    eq("per month", flow.netPerMonth, 1937.5);
+    eq("month by month", flow.monthly.length, 2);
+
+    const big = API.answerBiggestCharges(data, 12, 2);
+    eq("the biggest first", big.rows[0].amount, -60);
+    eq("and only as many as asked for", big.rows.length, 2);
+    ok("transfers are never in it", big.rows.every((r) => r.type === "expense"));
+
+    const loose = API.uncategorizedShare(data, "2026-01-01", "2026-12-31");
+    eq("everything here is categorized", loose.count, 0);
+  }
+
+  describe("questions: the window, and owning up to what is not categorized");
+  {
+    const rows = [];
+    for (const month of ["01", "02", "03", "04", "05"]) {
+      rows.push({ id: "a" + month, date: `2026-${month}-05`, amount: -100, type: "expense",
+                  account: "a", description: "SAMPLE NAMED", category: "Named" });
+      rows.push({ id: "b" + month, date: `2026-${month}-06`, amount: -300, type: "expense",
+                  account: "a", description: "SAMPLE UNNAMED" });
+    }
+    const data = API.migrate({ accounts: [{ id: "a", label: "A", kind: "credit_card" }],
+                               transactions: rows });
+
+    const all = API.recentMonths(data, 12);
+    eq("a window never invents months that have no data", all.months.length, 5);
+    const some = API.recentMonths(data, 2);
+    eq("a short window takes the most recent", some.months.length, 2);
+    eq("ending at the last month with data", some.months[1], "2026-05");
+
+    const loose = API.uncategorizedShare(data, all.from, all.to);
+    eq("it counts what has no name", loose.count, 5);
+    eq("and what that is worth", loose.total, -1500);
+    eq("as a share of spending", loose.share, 75);
+
+    eq("an empty set of rows averages to zero, not to NaN",
+       API.perMonthAverage([], 0).perMonth, 0);
+  }
+
   describe("accountSummaries");
   {
     const data = API.migrate({
