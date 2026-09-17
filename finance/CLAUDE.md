@@ -579,6 +579,29 @@ is checked both ways: it fails against the pre-fix file and passes after.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
+### One payee, two schedules
+
+A mortgage and a home-equity loan from the same lender print the same
+description and are told apart only by an account number — which `merchantKey`
+strips, because that is its job: without stripping, every fuel stop becomes its
+own merchant. Merged, the two monthly schedules interleave into gaps of
+0, 21, 10, 29, 0, 25… which is not regular on any cadence, so neither is
+reported. The first real user noticed the obvious way: the two largest bills in
+the household were missing from the recurring list.
+
+`recurringCharges()` now tries the payee whole first, exactly as before, and
+only when that fails does it split by `amountBands()` and try each band. The
+split fires only where there is a genuine gap in size — sorted amounts break
+into a new band when one is more than half again the last — so a shop with
+prices scattered from a few dollars to seventy stays whole, while $860 and
+$2,209 separate. Sub-streams are then held to a higher bar than whole ones
+(four charges, 0.7 regularity, steady amounts), because splitting always makes
+a noisy group look tidier than it is.
+
+The limitation this leaves: two loans of similar size, say $800 and $1,000,
+still merge. Distinguishing those would mean keeping account numbers in the
+merchant key, which would break grouping everywhere else.
+
 ### A card two people use
 
 A warehouse card names the member on every row, and on a household card that is

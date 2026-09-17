@@ -579,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.9.1";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.9.2";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -3195,6 +3195,34 @@ function addMonthsKeepingDay(iso, months, day) {
  * subscription would make the forecast useless. Regularity is judged on how
  * consistent the gaps are, not on how many charges there are.
  */
+/**
+ * Split one payee's charges where the amounts fall into clearly separate sizes.
+ *
+ * A mortgage and a home-equity loan from the same bank are told apart only by
+ * an account number, and `merchantKey` strips account numbers — that is its
+ * job, or every fuel stop would be its own merchant. Merged, two monthly
+ * schedules interleave into something that looks irregular and neither is
+ * reported. On real statements this hid both of a household's largest bills.
+ *
+ * The split only happens where there is a real gap in the sizes: sorted
+ * amounts break into a new band when one is more than half again the last.
+ * A shop with prices scattered from a few dollars to seventy stays whole,
+ * because no single step is that large.
+ */
+function amountBands(rows) {
+  const sorted = [...rows].sort((a, b) => Math.abs(a.amount) - Math.abs(b.amount));
+  const bands = [];
+  let band = [];
+  for (const tx of sorted) {
+    const size = Math.abs(tx.amount);
+    const previous = band.length ? Math.abs(band[band.length - 1].amount) : 0;
+    if (band.length && size > previous * 1.5) { bands.push(band); band = []; }
+    band.push(tx);
+  }
+  if (band.length) bands.push(band);
+  return bands;
+}
+
 function recurringCharges(data, today) {
   const now = today || new Date().toISOString().slice(0, 10);
   const groups = new Map();
@@ -3209,109 +3237,125 @@ function recurringCharges(data, today) {
 
   const found = [];
 
-  for (const [key, rows] of groups) {
-    if (rows.length < 3) continue;
+  for (const [key, all] of groups) {
+    const whole = analyseStream(key, all, now, false);
+    if (whole) { found.push(whole); continue; }
 
-    rows.sort((a, b) => (a.date < b.date ? -1 : 1));
-    const dates = rows.map((t) => t.date);
-    const amounts = rows.map((t) => Math.abs(t.amount));
-
-    const gaps = [];
-    for (let i = 1; i < dates.length; i++) gaps.push(daysBetween(dates[i - 1], dates[i]));
-    const gap = median(gaps.filter((g) => g > 0));
-    if (!gap) continue;
-
-    // Is the day of the month steady? That is what makes something "the 14th".
-    const doms = dates.map((d) => Number(d.slice(8, 10)));
-    const domCounts = new Map();
-    for (const d of doms) domCounts.set(d, (domCounts.get(d) || 0) + 1);
-    let modalDom = doms[0], modalHits = 0;
-    for (const [d, n] of domCounts) if (n > modalHits) { modalDom = d; modalHits = n; }
-    const nearModal = doms.filter((d) => Math.abs(d - modalDom) <= 2 ||
-                                         Math.abs(d - modalDom) >= 28).length;
-    const domSteady = nearModal / doms.length >= 0.6;
-
-    // Pick the cadence whose period best fits, preferring monthly when the day
-    // of the month holds — that is the difference between "monthly" and "every
-    // four weeks", which are only two days apart.
-    let cadence = null, best = Infinity;
-    for (const option of CADENCES) {
-      const distance = Math.abs(gap - option.days);
-      if (distance > option.tol) continue;
-      const score = distance - (option.id === "monthly" && domSteady ? 3 : 0);
-      if (score < best) { best = score; cadence = option; }
+    // Nothing regular in the payee as a whole. Before giving up, ask whether it
+    // is really two schedules wearing one name. Sub-streams are held to a
+    // higher bar, because a split always makes a noisy group look tidier.
+    for (const band of amountBands(all)) {
+      const entry = analyseStream(key, band, now, true);
+      if (entry) found.push(entry);
     }
-    if (!cadence) continue;
-
-    // How many gaps actually land on that cadence?
-    const onBeat = gaps.filter((g) => Math.abs(g - cadence.days) <= cadence.tol).length;
-    const regularity = gaps.length ? onBeat / gaps.length : 0;
-    if (regularity < 0.6) continue;
-
-    const typical = median(amounts);
-    const spread = amounts.filter(
-      (a) => Math.abs(a - typical) <= Math.max(1, typical * 0.15)).length / amounts.length;
-    const amountSteady = spread >= 0.7;
-
-    // A shop visited every week or two at varying prices is frequent, not
-    // subscribed. Without this a gas station reads as an $800-a-year
-    // subscription, and a forecast full of those is worse than no forecast.
-    if (cadence.days < 20 && !amountSteady) continue;
-
-    // What the next one will actually cost. Prices drift over two years of
-    // history, so the all-time median understates a subscription that has gone
-    // up — the last few charges are the honest forecast.
-    const recent = amounts.slice(-3);
-    const expected = median(recent);
-
-    const last = dates[dates.length - 1];
-    const sinceLast = daysBetween(last, now);
-    const active = sinceLast <= cadence.days * 1.8;
-
-    // Next expected: keep the day of the month when it is the defining feature,
-    // otherwise just add the period. Roll forward past today so the answer is
-    // always "the next one", never one that has already been and gone.
-    let next = cadence.id === "monthly" && domSteady
-      ? addMonthsKeepingDay(last, 1, modalDom)
-      : addDays(last, Math.round(cadence.days));
-    let guard = 0;
-    while (next < now && guard++ < 400) {
-      next = cadence.id === "monthly" && domSteady
-        ? addMonthsKeepingDay(next, 1, modalDom)
-        : addDays(next, Math.round(cadence.days));
-    }
-
-    found.push({
-      key,
-      rows,
-      count: rows.length,
-      cadence: cadence.id,
-      cadenceLabel: cadence.label + (cadence.id === "monthly" && domSteady
-        ? `, the ${ordinal(modalDom)}` : ""),
-      dayOfMonth: cadence.id === "monthly" && domSteady ? modalDom : null,
-      typical: Math.round(typical * 100) / 100,
-      expected: Math.round(expected * 100) / 100,
-      low: Math.round(Math.min(...amounts) * 100) / 100,
-      high: Math.round(Math.max(...amounts) * 100) / 100,
-      amountSteady,
-      // Forward-looking, from the recent price rather than the all-time median.
-      perMonth: Math.round((expected * cadence.perYear / 12) * 100) / 100,
-      perYear: Math.round(expected * cadence.perYear * 100) / 100,
-      rising: expected > typical * 1.15,
-      first: dates[0],
-      last,
-      next,
-      sinceLast,
-      active,
-      regularity,
-      confident: regularity >= 0.7 && rows.length >= 4 && amountSteady,
-      category: rows[rows.length - 1].category,
-      accounts: [...new Set(rows.map((t) => t.account))],
-      sample: rows[rows.length - 1],
-    });
   }
 
   return found.sort((a, b) => b.perYear - a.perYear);
+}
+
+/** Everything one candidate stream has to prove before it counts as recurring. */
+function analyseStream(key, rows, now, strict) {
+  if (rows.length < (strict ? 4 : 3)) return null;
+
+  rows.sort((a, b) => (a.date < b.date ? -1 : 1));
+  const dates = rows.map((t) => t.date);
+  const amounts = rows.map((t) => Math.abs(t.amount));
+
+  const gaps = [];
+  for (let i = 1; i < dates.length; i++) gaps.push(daysBetween(dates[i - 1], dates[i]));
+  const gap = median(gaps.filter((g) => g > 0));
+  if (!gap) return null;
+
+  // Is the day of the month steady? That is what makes something "the 14th".
+  const doms = dates.map((d) => Number(d.slice(8, 10)));
+  const domCounts = new Map();
+  for (const d of doms) domCounts.set(d, (domCounts.get(d) || 0) + 1);
+  let modalDom = doms[0], modalHits = 0;
+  for (const [d, n] of domCounts) if (n > modalHits) { modalDom = d; modalHits = n; }
+  const nearModal = doms.filter((d) => Math.abs(d - modalDom) <= 2 ||
+                                       Math.abs(d - modalDom) >= 28).length;
+  const domSteady = nearModal / doms.length >= 0.6;
+
+  // Pick the cadence whose period best fits, preferring monthly when the day
+  // of the month holds — that is the difference between "monthly" and "every
+  // four weeks", which are only two days apart.
+  let cadence = null, best = Infinity;
+  for (const option of CADENCES) {
+    const distance = Math.abs(gap - option.days);
+    if (distance > option.tol) continue;
+    const score = distance - (option.id === "monthly" && domSteady ? 3 : 0);
+    if (score < best) { best = score; cadence = option; }
+  }
+  if (!cadence) return null;
+
+  // How many gaps actually land on that cadence?
+  const onBeat = gaps.filter((g) => Math.abs(g - cadence.days) <= cadence.tol).length;
+  const regularity = gaps.length ? onBeat / gaps.length : 0;
+  if (regularity < (strict ? 0.7 : 0.6)) return null;
+
+  const typical = median(amounts);
+  const spread = amounts.filter(
+    (a) => Math.abs(a - typical) <= Math.max(1, typical * 0.15)).length / amounts.length;
+  const amountSteady = spread >= 0.7;
+
+  // A shop visited every week or two at varying prices is frequent, not
+  // subscribed. Without this a gas station reads as an $800-a-year
+  // subscription, and a forecast full of those is worse than no forecast.
+  if (cadence.days < 20 && !amountSteady) return null;
+  // A stream pulled out of a noisier group has to be steady to be believed.
+  if (strict && !amountSteady) return null;
+
+  // What the next one will actually cost. Prices drift over two years of
+  // history, so the all-time median understates a subscription that has gone
+  // up — the last few charges are the honest forecast.
+  const recent = amounts.slice(-3);
+  const expected = median(recent);
+
+  const last = dates[dates.length - 1];
+  const sinceLast = daysBetween(last, now);
+  const active = sinceLast <= cadence.days * 1.8;
+
+  // Next expected: keep the day of the month when it is the defining feature,
+  // otherwise just add the period. Roll forward past today so the answer is
+  // always "the next one", never one that has already been and gone.
+  let next = cadence.id === "monthly" && domSteady
+    ? addMonthsKeepingDay(last, 1, modalDom)
+    : addDays(last, Math.round(cadence.days));
+  let guard = 0;
+  while (next < now && guard++ < 400) {
+    next = cadence.id === "monthly" && domSteady
+      ? addMonthsKeepingDay(next, 1, modalDom)
+      : addDays(next, Math.round(cadence.days));
+  }
+
+  return {
+    key,
+    rows,
+    count: rows.length,
+    cadence: cadence.id,
+    cadenceLabel: cadence.label + (cadence.id === "monthly" && domSteady
+      ? `, the ${ordinal(modalDom)}` : ""),
+    dayOfMonth: cadence.id === "monthly" && domSteady ? modalDom : null,
+    typical: Math.round(typical * 100) / 100,
+    expected: Math.round(expected * 100) / 100,
+    low: Math.round(Math.min(...amounts) * 100) / 100,
+    high: Math.round(Math.max(...amounts) * 100) / 100,
+    amountSteady,
+    // Forward-looking, from the recent price rather than the all-time median.
+    perMonth: Math.round((expected * cadence.perYear / 12) * 100) / 100,
+    perYear: Math.round(expected * cadence.perYear * 100) / 100,
+    rising: expected > typical * 1.15,
+    first: dates[0],
+    last,
+    next,
+    sinceLast,
+    active,
+    regularity,
+    confident: regularity >= 0.7 && rows.length >= 4 && amountSteady,
+    category: rows[rows.length - 1].category,
+    accounts: [...new Set(rows.map((t) => t.account))],
+    sample: rows[rows.length - 1],
+  };
 }
 
 /** What is due between today and `days` from now, soonest first. */
@@ -4797,6 +4841,7 @@ window.__finance = {
   // recurring
   categorySlot,
   recurringCharges,
+  amountBands,
   upcomingCharges,
   recurringTotals,
   daysBetween,

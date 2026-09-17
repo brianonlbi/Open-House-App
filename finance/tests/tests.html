@@ -1160,6 +1160,79 @@ async function run(API) {
     eq("four times a year", quarterly[0].perYear, 360);
   }
 
+  describe("recurring: two loans from one lender, told apart only by size");
+  {
+    // The descriptions differ only by an account number, which merchantKey
+    // strips — so both land in one group and neither looks regular.
+    const rows = [];
+    let id = 0;
+    for (const month of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const mm = String(month).padStart(2, "0");
+      rows.push({ id: "big" + id++, date: `2026-${mm}-16`, amount: -2209.41, type: "expense",
+                  account: "chk", description: `SAMPLE LENDER PAYMENT 82004557${month}0` });
+      rows.push({ id: "small" + id++, date: `2026-${mm}-18`, amount: -860 - month, type: "expense",
+                  account: "chk", description: `SAMPLE LENDER PAYMENT 76007312${month}4` });
+    }
+    const data = API.migrate({ accounts: [{ id: "chk", label: "Checking", kind: "checking" }],
+                               transactions: rows });
+    API.recategorizeAll(data);
+
+    eq("both fall into one merchant group",
+       new Set(data.transactions.map((t) => API.merchantKey(t))).size, 1);
+
+    const found = API.recurringCharges(data, "2026-08-20");
+    eq("and both are found anyway", found.length, 2);
+    eq("the bigger one first", found[0].expected, 2209.41);
+    eq("monthly", found[0].cadence, "monthly");
+    eq("on its own day", found[0].dayOfMonth, 16);
+    eq("the smaller one too", found[1].dayOfMonth, 18);
+    ok("its amount drifts but is still steady enough", found[1].amountSteady);
+    ok("both are live", found.every((f) => f.active));
+    // The forecast prices from the last three charges, so the drifting loan is
+    // quoted at the median of months 6, 7 and 8 — not at its final amount.
+    eq("the drifting one is priced from its recent charges", found[1].expected, 867);
+    eq("a year of the pair", Math.round(found[0].perYear + found[1].perYear),
+       Math.round(2209.41 * 12 + 867 * 12));
+  }
+
+  describe("amountBands — only split where there is a real gap in size");
+  {
+    const tx = (amount) => ({ amount: -amount, date: "2026-01-01", description: "SAMPLE" });
+    eq("one steady amount is one band", API.amountBands([tx(50), tx(50), tx(52)]).length, 1);
+    eq("a shop's scattered prices stay together",
+       API.amountBands([tx(3.51), tx(4.2), tx(6.27), tx(8), tx(11), tx(15), tx(20),
+                        tx(27), tx(36), tx(48), tx(63)]).length, 1);
+    eq("a loan pair splits", API.amountBands([tx(860), tx(880), tx(2209), tx(2209)]).length, 2);
+    eq("the small one comes first",
+       Math.abs(API.amountBands([tx(2209), tx(860)])[0][0].amount), 860);
+    eq("nothing in, nothing out", API.amountBands([]).length, 0);
+  }
+
+  describe("recurring: a split stream has to be steadier than a whole one");
+  {
+    // Same story, but the smaller "loan" is really a shop at scattered prices
+    // on scattered days. A split must not make that look like a bill.
+    const rows = [];
+    let id = 0;
+    for (const month of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const mm = String(month).padStart(2, "0");
+      rows.push({ id: "big" + id++, date: `2026-${mm}-16`, amount: -2209.41, type: "expense",
+                  account: "chk", description: "SAMPLE PAYEE 8200455710" });
+    }
+    const days = ["02", "09", "11", "19", "23", "27"];
+    const prices = [41, 87, 63, 22, 95, 58];
+    days.forEach((d, i) => rows.push({ id: "shop" + id++, date: `2026-03-${d}`,
+      amount: -prices[i], type: "expense", account: "chk",
+      description: "SAMPLE PAYEE 7600731214" }));
+    const data = API.migrate({ accounts: [{ id: "chk", label: "Checking", kind: "checking" }],
+                               transactions: rows });
+    API.recategorizeAll(data);
+
+    const found = API.recurringCharges(data, "2026-08-20");
+    eq("only the real schedule is reported", found.length, 1);
+    eq("and it is the steady one", found[0].expected, 2209.41);
+  }
+
   describe("recurring: what must NOT be called a subscription");
   {
     const irregular = API.migrate({ transactions: [
