@@ -579,6 +579,34 @@ is checked both ways: it fails against the pre-fix file and passes after.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
+### A mapping says what format a file is, not which card it came from
+
+Two store cards issued by the same bank export byte-identical columns. The
+column mapper is keyed by a hash of the column names, so the mapping saved for
+one silently claims the other, and its rows land on the wrong card with nothing
+said. This is a real case from the user's own statements, and the account picker
+alone was not enough: it was already sitting there, pre-filled with the wrong
+account, looking like a decision that had been made correctly.
+
+`fileLooksLikeAccount()` compares the filename against the account's name and,
+when nothing matches, the review panel says out loud where the rows are heading
+and how to send them somewhere else. It is a weak signal, so it only ever raises
+the question — it never reassigns anything on its own.
+
+### Reading the sign convention off a statement with no purchases on it
+
+`guessMoneyOut()` normally learns from the purchases: most rows on a statement
+are purchases, so if most amounts are positive the issuer signs money out
+positive. A card that was only paid down over the period breaks that — it is
+nothing but payments and zero-dollar interest lines, and reading those rows
+directly gets the answer exactly backwards, since a payment moves the opposite
+way from a purchase.
+
+So when there are fewer than three rows to learn from, the guess is read off the
+payments and inverted: money in signed negative means money out is positive. The
+same logic protects the safety-net flip in the parser, which also has no
+purchases to check against on such a file and correctly leaves it alone.
+
 ### Removing a bad import
 
 A finance app that can only add is not trustworthy. Getting an import wrong is

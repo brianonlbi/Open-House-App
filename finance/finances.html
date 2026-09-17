@@ -579,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.8.0";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.8.1";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -1400,16 +1400,52 @@ function guessMapping(header, rows) {
 }
 
 /** Guess the sign convention from the amounts themselves. */
-function guessMoneyOut(header, rows, amountColumn) {
+/**
+ * Build a test for "this row is money coming in", from the row types already
+ * marked as payments or refunds. Used to read the sign convention off a
+ * statement that has nothing else to read it from.
+ */
+function moneyInRow(header, map, transferTypes, refundTypes) {
+  const index = map && map.issuer_type ? header.indexOf(map.issuer_type) : -1;
+  const kinds = new Set([...(transferTypes || []), ...(refundTypes || [])]
+    .map((v) => String(v).trim().toLowerCase()));
+  if (index === -1 || !kinds.size) return () => false;
+  return (row) => kinds.has(String(row[index] ?? "").trim().toLowerCase());
+}
+
+/**
+ * Which way the issuer signs money going out.
+ *
+ * Normally this reads itself off the purchases: most rows on a statement are
+ * purchases, so if most amounts are positive the issuer signs money out
+ * positive. A statement with no purchases on it breaks that — a card that was
+ * only paid down over the period is nothing but payments and zero-dollar
+ * interest lines, and guessing from those rows directly gets the answer exactly
+ * backwards. So when there is nothing to learn from, read it off the payments
+ * instead and invert: money in signed negative means money out is positive.
+ */
+function guessMoneyOut(header, rows, amountColumn, isMoneyIn) {
   const index = header.indexOf(amountColumn);
   if (index === -1) return "negative";
-  const values = rows.map((r) => Number(String(r[index] ?? "").replace(/[$,\s]/g, "")))
-                     .filter((n) => Number.isFinite(n) && n !== 0);
-  if (!values.length) return "negative";
-  const positive = values.filter((n) => n > 0).length / values.length;
-  // Most rows on any statement are purchases. If most amounts are positive, the
-  // issuer is signing money out positive.
-  return positive > 0.6 ? "positive" : "negative";
+  const amount = (row) => Number(String(row[index] ?? "").replace(/[$,\s]/g, ""));
+  const usable = rows.filter((r) => Number.isFinite(amount(r)) && amount(r) !== 0);
+  const incoming = isMoneyIn || (() => false);
+
+  const spending = usable.filter((r) => !incoming(r));
+  if (spending.length >= 3) {
+    return spending.filter((r) => amount(r) > 0).length / spending.length > 0.6
+      ? "positive" : "negative";
+  }
+
+  const payments = usable.filter((r) => incoming(r));
+  if (payments.length) {
+    return payments.filter((r) => amount(r) < 0).length / payments.length > 0.6
+      ? "positive" : "negative";
+  }
+
+  if (!usable.length) return "negative";
+  return usable.filter((r) => amount(r) > 0).length / usable.length > 0.6
+    ? "positive" : "negative";
 }
 
 /** Distinct values of the chosen row-type column, most common first. */
@@ -1476,7 +1512,8 @@ function beginMapping(text, filename, header, signature) {
       kind: "credit_card",
       map,
       required: [map.date, map.amount, map.description].filter(Boolean),
-      moneyOut: guessMoneyOut(header, rows, map.amount),
+      moneyOut: guessMoneyOut(header, rows, map.amount,
+                              moneyInRow(header, map, guessed.transferTypes, guessed.refundTypes)),
       transferTypes: guessed.transferTypes,
       refundTypes: guessed.refundTypes,
       feeTypes: guessed.feeTypes,
@@ -1560,6 +1597,23 @@ function accountIdFromLabel(label) {
   return String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+/**
+ * Does this filename look like it belongs to this account?
+ *
+ * A saved mapping is keyed by column names, which say what *format* a file is,
+ * not which card it came from. Two store cards issued by the same bank export
+ * identical columns, so the mapping for one silently claims the other — and its
+ * rows land on the wrong card with nothing said. Comparing the filename against
+ * the account's name catches that: it is a weak signal, so it only ever raises
+ * a question, never makes the decision.
+ */
+function fileLooksLikeAccount(filename, label) {
+  const words = accountIdFromLabel(label).split("-").filter((w) => w.length >= 3);
+  if (!words.length) return true;
+  const name = accountIdFromLabel(String(filename).replace(/\.[a-z]+$/i, ""));
+  return words.some((w) => name.includes(w));
+}
+
 /** Turn a label into a stable, unique account id. */
 function accountIdFrom(label, taken) {
   const base = accountIdFromLabel(label) || "account";
@@ -1621,6 +1675,7 @@ async function beginImportFromText(text, filename) {
     filename,
     parserId: found.id,
     parserLabel: found.parser.label,
+    source: found.source,
     parser: found.parser,
     account,
     // Which account these rows land in: an existing id, or "" meaning make a new
@@ -3856,7 +3911,10 @@ function renderColumnMapper() {
             if (key !== field && spec.map[key] === value && value) delete spec.map[key];
           }
           if (value) spec.map[field] = value; else delete spec.map[field];
-          if (field === "amount") spec.moneyOut = guessMoneyOut(pending.header, pending.rows, value);
+          if (field === "amount") {
+            spec.moneyOut = guessMoneyOut(pending.header, pending.rows, value,
+              moneyInRow(pending.header, spec.map, spec.transferTypes, spec.refundTypes));
+          }
           if (field === "issuer_type") {
             pending.typeValues = typeValues(pending.header, pending.rows, value);
             spec.transferTypes = []; spec.refundTypes = []; spec.feeTypes = [];
@@ -4076,6 +4134,19 @@ function renderImportPreview() {
     row.append(el("span", { class: "small muted", text: `id: ${imp.resolvedId}` }));
   }
   panel.append(row);
+
+  // A saved mapping identifies the format, not the card. Say so when the file
+  // being read does not look like it came from the account it is heading into.
+  if (imp.source === "saved" && imp.targetId &&
+      !fileLooksLikeAccount(imp.filename, imp.targetLabel)) {
+    panel.append(el("div", { class: "note warn", style: "margin-top:12px" }, [
+      el("strong", { text: `Check the account: this is going into ${imp.targetLabel}.` }),
+      `These columns match the mapping saved for ${imp.targetLabel}, which is why it was picked. ` +
+      `But the file is called ${imp.filename}, so if this is a different card that happens to use ` +
+      `the same statement format, choose “New account…” above and name it — otherwise its rows ` +
+      `join ${imp.targetLabel} and the two cards cannot be told apart afterwards.`,
+    ]));
+  }
 
   // Call out the rows that would otherwise produce a wrong number.
   const transfers = imp.rows.filter((t) => t.type === "transfer");
@@ -4610,6 +4681,8 @@ window.__finance = {
   headerSignature,
   guessMapping,
   guessMoneyOut,
+  moneyInRow,
+  fileLooksLikeAccount,
   typeValues,
   parserFromSpec,
   makeCsvParser,

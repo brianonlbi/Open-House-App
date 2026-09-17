@@ -1359,6 +1359,66 @@ async function run(API) {
     eq("and the now-empty account is cleared away too", data.accounts.length, 0);
   }
 
+  describe("guessMoneyOut — a statement with no purchases on it");
+  {
+    // A card that was only paid down: nothing but payments and zero-dollar
+    // interest lines. Reading the sign off those rows directly gets it backwards.
+    const header = ["Date", "Amount", "Description", "Type"];
+    const rows = [
+      ["04/10/2026", "$-300.00", "SAMPLE AUTOPAY", "payment"],
+      ["04/17/2026", "$0.00", "INTEREST CHARGE ON PURCHASES", "interest charged"],
+      ["05/10/2026", "$-300.00", "SAMPLE AUTOPAY", "payment"],
+      ["05/19/2026", "$0.00", "INTEREST CHARGE ON PURCHASES", "interest charged"],
+      ["06/10/2026", "$-300.00", "SAMPLE AUTOPAY", "payment"],
+    ];
+    const map = { date: "Date", amount: "Amount", description: "Description", issuer_type: "Type" };
+    const isIn = API.moneyInRow(header, map, ["payment"], []);
+
+    ok("the payments are recognised as money coming in", isIn(rows[0]));
+    ok("an interest line is not", !isIn(rows[1]));
+    eq("money out is positive, read off the payments and inverted",
+       API.guessMoneyOut(header, rows, "Amount", isIn), "positive");
+    eq("without that, the same file reads exactly backwards",
+       API.guessMoneyOut(header, rows, "Amount"), "negative");
+
+    // The ordinary case is unchanged: purchases still decide when there are any.
+    const withPurchases = rows.concat([
+      ["06/12/2026", "$40.00", "SAMPLE SHOP", "purchase"],
+      ["06/13/2026", "$12.00", "SAMPLE SHOP", "purchase"],
+      ["06/14/2026", "$90.00", "SAMPLE SHOP", "purchase"],
+    ]);
+    eq("purchases decide when the statement has some",
+       API.guessMoneyOut(header, withPurchases, "Amount", isIn), "positive");
+
+    const theOtherWay = [
+      ["06/10/2026", "$300.00", "SAMPLE AUTOPAY", "payment"],
+      ["06/12/2026", "$-40.00", "SAMPLE SHOP", "purchase"],
+      ["06/13/2026", "$-12.00", "SAMPLE SHOP", "purchase"],
+      ["06/14/2026", "$-90.00", "SAMPLE SHOP", "purchase"],
+    ];
+    eq("an issuer that signs money out negative still reads that way",
+       API.guessMoneyOut(header, theOtherWay, "Amount", API.moneyInRow(header, map, ["payment"], [])),
+       "negative");
+    eq("payments-only, signed the other way, reads the other way too",
+       API.guessMoneyOut(header, [theOtherWay[0]], "Amount", isIn), "negative");
+    eq("no rows at all falls back to the common convention",
+       API.guessMoneyOut(header, [], "Amount", isIn), "negative");
+    eq("an amount column that is not there is not guessed at",
+       API.guessMoneyOut(header, rows, "Nope", isIn), "negative");
+  }
+
+  describe("fileLooksLikeAccount — a mapping says the format, not the card");
+  {
+    ok("the account's own file matches", API.fileLooksLikeAccount("Home-Depot-2026.csv", "Home Depot"));
+    ok("case and separators do not matter", API.fileLooksLikeAccount("home_depot_aug.CSV", "Home Depot"));
+    ok("one word in common is enough", API.fileLooksLikeAccount("depot-latest.csv", "Home Depot"));
+    ok("a different card with the same columns does not",
+       !API.fileLooksLikeAccount("Best-Buy-2026.csv", "Home Depot"));
+    ok("short words are ignored rather than matched loosely",
+       !API.fileLooksLikeAccount("statement.csv", "My Card"));
+    ok("an unnamed account never raises the question", API.fileLooksLikeAccount("anything.csv", ""));
+  }
+
   describe("removing an account forgets how its files were read");
   {
     const data = API.migrate({
