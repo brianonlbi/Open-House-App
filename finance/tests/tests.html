@@ -1359,6 +1359,73 @@ async function run(API) {
     eq("and the now-empty account is cleared away too", data.accounts.length, 0);
   }
 
+  describe("a card two people use says who spent it");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "shared", label: "Shared", kind: "credit_card" }],
+      transactions: [
+        { id: "a", date: "2026-01-01", amount: -60, type: "expense", account: "shared",
+          description: "SAMPLE FUEL", purchased_by: "SAMPLE ONE" },
+        { id: "b", date: "2026-01-02", amount: -20, type: "expense", account: "shared",
+          description: "SAMPLE SHOP", purchased_by: "SAMPLE TWO" },
+        { id: "c", date: "2026-01-03", amount: -30, type: "expense", account: "shared",
+          description: "SAMPLE SHOP", purchased_by: "SAMPLE ONE" },
+      ],
+    });
+    const people = API.whoSpends(data);
+    eq("both people are listed", people.length, 2);
+    eq("the one with more rows comes first", people[0], "SAMPLE ONE");
+
+    eq("a card nobody is named on offers no choice",
+       API.whoSpends(API.migrate({ transactions: [
+         { id: "x", date: "2026-01-01", amount: -5, type: "expense", account: "a",
+           description: "SAMPLE" }] })).length, 0);
+
+    eq("a blank name is not a person",
+       API.whoSpends(API.migrate({ transactions: [
+         { id: "x", date: "2026-01-01", amount: -5, type: "expense", account: "a",
+           description: "SAMPLE", purchased_by: "  " }] })).length, 0);
+
+    eq("the table shows a first name, not the whole thing",
+       API.firstName("JENNIFER MARTIN"), "JENNIFER");
+    eq("one word is left alone", API.firstName("SAMPLE"), "SAMPLE");
+    eq("nothing in, nothing out", API.firstName(""), "");
+    eq("and undefined does not throw", API.firstName(undefined), "");
+  }
+
+  describe("guessMapping — a warehouse card names the member who spent it");
+  {
+    const header = ["Status", "Date", "Description", "Debit", "Credit", "Member Name"];
+    const rows = [
+      ["Cleared", "01/04/2026", "SAMPLE FUEL", "44.70", "", "SAMPLE ONE"],
+      ["Cleared", "01/15/2026", "ONLINE PAYMENT, THANK YOU", "", "-600.00", "SAMPLE TWO"],
+      ["Cleared", "01/17/2026", "SAMPLE WAREHOUSE", "438.59", "", "SAMPLE ONE"],
+    ];
+    const map = API.guessMapping(header, rows);
+    eq("Member Name is recognised as who spent it", map.purchased_by, "Member Name");
+    eq("the date is found", map.date, "Date");
+    eq("money out has its own column", map.debit, "Debit");
+    eq("money in has its own column", map.credit, "Credit");
+    ok("Status is not mistaken for a field we want",
+       Object.values(map).indexOf("Status") === -1);
+
+    // The credit column is written negative here. The column says the direction,
+    // so the sign in it must not be allowed to say it twice.
+    const parser = API.parserFromSpec({
+      label: "Sample", kind: "credit_card", map,
+      required: [map.date, map.description],
+    });
+    const csv = [header].concat(rows)
+      .map((r) => r.map((c) => (c.includes(",") ? `"${c}"` : c)).join(","))
+      .join("\n");
+    const out = parser.parse(csv, "s.csv", "acct");
+    eq("every row reads", out.transactions.length, 3);
+    eq("a purchase is money out", out.transactions[0].amount, -44.70);
+    eq("a payment written as a negative credit is still money IN",
+       out.transactions[1].amount, 600);
+    eq("and the member comes with it", out.transactions[2].purchased_by, "SAMPLE ONE");
+  }
+
   describe("guessKind — a bank export is not a credit card");
   {
     eq("a cheque number means a bank account",

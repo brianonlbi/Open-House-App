@@ -579,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.9.0";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.9.1";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -603,7 +603,7 @@ const state = {
   pendingMapping: null,// an unfamiliar file waiting for its columns to be mapped
   pendingImport: null, // a parsed file staged for review, not yet committed
   lastImport: null,    // { read, imported, duplicates, problems } of the last commit
-  filters: { account: "", category: "", type: "", from: "", to: "", q: "", raw: false },
+  filters: { account: "", category: "", type: "", from: "", to: "", q: "", who: "", raw: false },
   sort: { key: "date", dir: "desc" },
   rowLimit: 500,       // rendered rows before "show all"; keeps a big file responsive
   backlogLimit: 40,    // uncategorized merchants shown before "show more"
@@ -1348,7 +1348,8 @@ const FIELD_HINTS = {
   issuer_type:     [/^type$/i, /^transaction\s*type$/i],
   issuer_category: [/^category$/i, /^classification$/i],
   notes:           [/^memo$/i, /^notes?$/i],
-  purchased_by:    [/^purchased\s*by$/i, /^cardholder$/i, /^user$/i, /^member$/i],
+  purchased_by:    [/^purchased\s*by$/i, /^cardholder$/i, /^card\s*member$/i,
+                    /^member(\s*name)?$/i, /^user$/i],
 };
 
 const looksLikeDate  = (v) => !!toISODate(v);
@@ -2612,6 +2613,7 @@ function filteredTransactions(options) {
     if (f.type && tx.type !== f.type) return false;
     if (f.from && tx.date < f.from) return false;
     if (f.to && tx.date > f.to) return false;
+    if (f.who && tx.purchased_by !== f.who) return false;
     if (needle) {
       const hay = [tx.description, tx.merchant, tx.notes, tx.issuer_category].join(" ").toUpperCase();
       if (!hay.includes(needle)) return false;
@@ -2671,8 +2673,25 @@ function filterDescription() {
   else if (f.to) bits.push(`up to ${day(f.to)}`);
   if (f.category) bits.push(f.category);
   if (f.type) bits.push(f.type === "expense" ? "expenses only" : f.type + "s only");
+  if (f.who) bits.push(`purchased by ${f.who}`);
   if (f.q.trim()) bits.push(`matching \u201c${f.q.trim()}\u201d`);
   return bits.join(" \u00b7 ");
+}
+
+/** "JENNIFER MARTIN" is too wide for a dense table; "JENNIFER" is not. */
+function firstName(name) {
+  return String(name || "").trim().split(/\s+/)[0] || "";
+}
+
+/** The people a shared card names, most rows first. Empty unless an issuer says. */
+function whoSpends(data) {
+  const counts = new Map();
+  for (const tx of (data ? data.transactions : [])) {
+    const who = (tx.purchased_by || "").trim();
+    if (who) counts.set(who, (counts.get(who) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name]) => name);
 }
 
 /** One card per account, so each card's own activity is visible at a glance. */
@@ -2750,6 +2769,16 @@ function renderFilters(rows) {
       .map(([v, t]) => el("option", { value: v, selected: f.type === v, text: t })));
   bar.append(el("label", { text: "Type" }), typeSelect);
 
+  // Only worth showing on a card two people use, which is the only place the
+  // issuer bothers to say who spent it.
+  const people = whoSpends(data);
+  if (people.length > 1) {
+    const whoSelect = el("select", { onchange: set("who") },
+      [el("option", { value: "", selected: !f.who, text: "Anyone" })]
+        .concat(people.map((n) => el("option", { value: n, selected: f.who === n, text: n }))));
+    bar.append(el("label", { text: "Purchased by" }), whoSelect);
+  }
+
   bar.append(el("input", {
     type: "search", placeholder: "Search description…", value: f.q, size: "22",
     oninput: (ev) => { f.q = ev.target.value; renderTransactions(); },
@@ -2763,12 +2792,13 @@ function renderFilters(rows) {
     " raw descriptions",
   ]));
 
-  const active = f.account || f.category || f.type || f.from || f.to || f.q;
+  const active = f.account || f.category || f.type || f.from || f.to || f.q || f.who;
   if (active) {
     bar.append(el("button", {
       class: "btn link",
       onclick: () => {
-        state.filters = { account: "", category: "", type: "", from: "", to: "", q: "", raw: f.raw };
+        state.filters = { account: "", category: "", type: "", from: "", to: "",
+                          q: "", who: "", raw: f.raw };
         renderTransactions();
       },
     }, "clear filters"));
@@ -2940,6 +2970,8 @@ function renderTransactions() {
         : null]);
 
   const showAccount = !state.filters.account;
+  // A whole name in every row of a dense table is noise; the first name is not.
+  const showWho = !state.filters.who && rows.some((tx) => (tx.purchased_by || "").trim());
 
   body.append(categoryDatalist());
   const suggestion = renderRuleSuggestion();
@@ -2979,6 +3011,7 @@ function renderTransactions() {
         head("date", "Date"),
         showAccount ? head("account", "Account") : null,
         head("description", "Description"),
+        showWho ? head("purchased_by", "By") : null,
         head("category", "Category"),
         el("th", { text: "Notes" }),
         el("th", { text: "Type" }),
@@ -3001,6 +3034,8 @@ function renderTransactions() {
           title: tx.description,
           text: state.filters.raw ? tx.description : (tx.merchant || tx.description),
         }),
+        showWho ? el("td", { class: "small muted", title: tx.purchased_by || "",
+                             text: firstName(tx.purchased_by) }) : null,
         el("td", { class: "catcell" }, [categoryDot(tx.category), categoryCell(tx)]),
         el("td", {}, notesCell(tx)),
         el("td", {}, tx.type === "transfer"
@@ -4753,6 +4788,8 @@ window.__finance = {
   fileLooksLikeAccount,
   guessKind,
   resolveType,
+  whoSpends,
+  firstName,
   typeValues,
   parserFromSpec,
   makeCsvParser,

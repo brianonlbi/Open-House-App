@@ -579,6 +579,25 @@ is checked both ways: it fails against the pre-fix file and passes after.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
+### A card two people use
+
+A warehouse card names the member on every row, and on a household card that is
+the interesting question — who is this spending. The field was already captured
+and mappable, and then thrown away: nothing displayed it and nothing filtered by
+it. It now appears as a "By" column and a "Purchased by" filter, both only when
+the data actually carries a name, because on a single-holder card they are dead
+weight. The column shows first names: a dense table has no room for
+"JENNIFER MARTIN" on every row, and the full name is in the title attribute.
+
+The column hides once the table is filtered to one person, the same rule the
+Account column already follows — a column whose every cell is identical is
+noise.
+
+Beware reading the per-person split before the payments are marked as transfers.
+Whoever pays the bill has the payments credited against their name, so their
+spending reads far lower than it is; on the first real card this made one
+person's total look a third of the other's when the purchases were comparable.
+
 ### Bank exports do not say what their rows are
 
 A credit-card export labels its own payments. A bank export often does not: a
