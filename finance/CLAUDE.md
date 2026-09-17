@@ -462,7 +462,23 @@ order, so a rule shadowed by an earlier one shows as 0 and can be spotted.
 
 **Every account gets its own card in the strip above the table**, showing that
 account's row count, net spending and how much has been paid to it. Clicking one
-filters the table to it; "All accounts" clears it. This is how "what do I have
+filters the table to it; "All accounts" clears it.
+
+**The cards obey every filter except the account one.** They originally showed
+all-time totals, which meant setting a date range changed the table and the
+footer while the largest numbers on the page silently kept saying something
+else — the exact failure this app exists to avoid, and a user caught it within
+minutes of first use. `filteredTransactions({ ignoreAccount: true })` is what
+the cards read: every other filter applied, so each card answers "what did this
+card do in the period I am looking at", and selecting one card does not zero
+the others.
+
+When any filter is active, a line under the strip names it in words
+(`filterDescription()`) with a one-click escape. Totals that do not say what
+they cover are how misleading numbers happen.
+
+Totals sit **above** the table, next to the controls that change them, not in a
+footer below a long table where they have to be hunted for. This is how "what do I have
 going on with each card" gets answered, and it must keep working as accounts are
 added — the strip wraps and nothing is hardcoded per institution.
 

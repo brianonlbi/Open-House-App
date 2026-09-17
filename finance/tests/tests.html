@@ -1030,6 +1030,83 @@ async function run(API) {
     eq("empty file has no latest date", API.latestDate(API.migrate({ transactions: [] })), "");
   }
 
+  describe("the account cards follow the filters, not all time");
+  {
+    const save = { data: API.state.data, filters: API.state.filters };
+    API.state.data = API.migrate({
+      accounts: [{ id: "a", label: "Card A" }, { id: "b", label: "Card B" }],
+      transactions: [
+        { id: "1", date: "2026-01-10", amount: -100, type: "expense", account: "a", category: "Gas" },
+        { id: "2", date: "2026-06-10", amount: -50,  type: "expense", account: "a", category: "Gas" },
+        { id: "3", date: "2026-06-11", amount: -25,  type: "expense", account: "b", category: "Food" },
+        { id: "4", date: "2026-06-12", amount: 400,  type: "transfer", account: "a", category: "Transfer" },
+      ],
+    });
+    const setFilters = (patch) => {
+      API.state.filters = Object.assign(
+        { account: "", category: "", type: "", from: "", to: "", q: "", raw: false }, patch);
+    };
+
+    setFilters({});
+    eq("no filter: everything", API.filteredTransactions({ ignoreAccount: true }).length, 4);
+    eq("all-time spending", API.totalsFor(API.filteredTransactions({ ignoreAccount: true })).spend, -175);
+
+    // The bug: a date filter changed the table but not the cards.
+    setFilters({ from: "2026-06-01", to: "2026-06-30" });
+    const june = API.filteredTransactions({ ignoreAccount: true });
+    eq("a date filter narrows the card source rows", june.length, 3);
+    eq("so the headline total is the period's, not all time",
+       API.totalsFor(june).spend, -75);
+    eq("card A in that period", API.totalsFor(june.filter((t) => t.account === "a")).spend, -50);
+    eq("card B in that period", API.totalsFor(june.filter((t) => t.account === "b")).spend, -25);
+    eq("and transfers are still excluded and reported", API.totalsFor(june).transfers, 400);
+
+    // Selecting an account must not blank out the other cards.
+    setFilters({ from: "2026-06-01", to: "2026-06-30", account: "a" });
+    eq("picking a card leaves the other cards' rows intact",
+       API.filteredTransactions({ ignoreAccount: true }).length, 3);
+    eq("while the table itself is just that card",
+       API.filteredTransactions().length, 2);
+
+    // Other filters apply to the cards too.
+    setFilters({ category: "Gas" });
+    eq("a category filter reaches the cards", API.totalsFor(API.filteredTransactions({ ignoreAccount: true })).spend, -150);
+    setFilters({ q: "nothing matches this" });
+    eq("a search with no hits gives zero, honestly",
+       API.totalsFor(API.filteredTransactions({ ignoreAccount: true })).spend, 0);
+
+    API.state.data = save.data;
+    API.state.filters = save.filters;
+  }
+
+  describe("filterDescription — the totals say what window they cover");
+  {
+    const save = API.state.filters;
+    const set = (patch) => {
+      API.state.filters = Object.assign(
+        { account: "", category: "", type: "", from: "", to: "", q: "", raw: false }, patch);
+    };
+
+    set({});
+    eq("nothing filtered, nothing to say", API.filterDescription(), "");
+
+    set({ from: "2026-03-26", to: "2026-09-16" });
+    ok("a range reads as a range", /Mar.*2026.*Sep.*2026/.test(API.filterDescription()),
+       API.filterDescription());
+
+    set({ from: "2026-03-26" });
+    ok("an open end says so", API.filterDescription().startsWith("from "), API.filterDescription());
+    set({ to: "2026-09-16" });
+    ok("and the other way round", API.filterDescription().startsWith("up to "), API.filterDescription());
+
+    set({ category: "Gas", q: "wawa", type: "expense" });
+    const described = API.filterDescription();
+    ok("every active filter is named", described.includes("Gas") && described.includes("wawa") &&
+       described.includes("expenses only"), described);
+
+    API.state.filters = save;
+  }
+
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");
   summary.className = failed ? "fail" : "pass";

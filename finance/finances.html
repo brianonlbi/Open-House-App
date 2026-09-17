@@ -313,6 +313,13 @@ th .arrow { opacity: .6; font-size: 9px; }
   padding: 7px 2px; border-top: 1px solid var(--border); margin-top: 4px;
 }
 .summary-line b { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+/* Above the table it is a heading for what follows, not a footnote. */
+.summary-line.top {
+  border-top: 0; border-bottom: 1px solid var(--border-strong);
+  margin: 0 0 6px; padding: 4px 2px 8px; align-items: baseline; font-size: 13px;
+}
+.summary-line.top b { font-size: 15px; }
+.strip-note { margin: -4px 0 10px; }
 
 .warnish { color: var(--warn); font-weight: 600; }
 
@@ -2391,12 +2398,20 @@ const accountLabel = (id) => {
   return account ? account.label : id;
 };
 
-/** Everything matching the current filters. */
-function filteredTransactions() {
+/**
+ * Everything matching the current filters.
+ *
+ * `ignoreAccount` applies every filter except the account one. The account
+ * cards need that: each card must show its own total for the period being
+ * looked at, and filtering by account first would leave every other card at
+ * zero.
+ */
+function filteredTransactions(options) {
   const f = state.filters;
+  const ignoreAccount = !!(options && options.ignoreAccount);
   const needle = f.q.trim().toUpperCase();
   return (state.data ? state.data.transactions : []).filter((tx) => {
-    if (f.account && tx.account !== f.account) return false;
+    if (!ignoreAccount && f.account && tx.account !== f.account) return false;
     if (f.category && tx.category !== f.category) return false;
     if (f.type && tx.type !== f.type) return false;
     if (f.from && tx.date < f.from) return false;
@@ -2448,10 +2463,31 @@ function totalsFor(rows) {
            transfers: cents(transfers), refunds: cents(refunds), fees: cents(fees) };
 }
 
+/** The active filters in plain words, for labelling the totals they produce. */
+function filterDescription() {
+  const f = state.filters;
+  const day = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, {
+    month: "short", day: "numeric", year: "numeric",
+  });
+  const bits = [];
+  if (f.from && f.to) bits.push(`${day(f.from)} \u2013 ${day(f.to)}`);
+  else if (f.from) bits.push(`from ${day(f.from)}`);
+  else if (f.to) bits.push(`up to ${day(f.to)}`);
+  if (f.category) bits.push(f.category);
+  if (f.type) bits.push(f.type === "expense" ? "expenses only" : f.type + "s only");
+  if (f.q.trim()) bits.push(`matching \u201c${f.q.trim()}\u201d`);
+  return bits.join(" \u00b7 ");
+}
+
 /** One card per account, so each card's own activity is visible at a glance. */
 function renderAccountStrip() {
   const strip = el("div", { class: "acct-strip" });
-  const all = (state.data ? state.data.transactions : []);
+  // Everything the filters allow, ignoring which account is selected — so the
+  // cards answer "what did each card do in this period", not "what has this
+  // card ever done". Showing all-time totals above a filtered table was
+  // actively misleading: the biggest numbers on the page disagreed with the
+  // rows underneath them.
+  const all = filteredTransactions({ ignoreAccount: true });
   const accounts = (state.data ? state.data.accounts : []) || [];
 
   const card = (id, label, rows) => {
@@ -2475,7 +2511,24 @@ function renderAccountStrip() {
   for (const account of accounts) {
     strip.append(card(account.id, account.label, all.filter((t) => t.account === account.id)));
   }
-  return strip;
+
+  const describing = filterDescription();
+  if (!describing) return strip;
+
+  return el("div", {}, [
+    strip,
+    el("p", { class: "small muted strip-note" }, [
+      el("strong", { text: "Showing " }), describing,
+      el("button", {
+        class: "btn link", style: "margin-left:8px",
+        onclick: () => {
+          state.filters = { account: state.filters.account, category: "", type: "",
+                            from: "", to: "", q: "", raw: state.filters.raw };
+          renderTransactions();
+        },
+      }, "show everything"),
+    ]),
+  ]);
 }
 
 function renderFilters(rows) {
@@ -2707,7 +2760,21 @@ function renderTransactions() {
     },
   });
 
-  body.append(el("div", { class: "scroll", style: "max-height:calc(100vh - 360px)" }, [
+  // Totals sit with the controls that change them, not below a long table
+  // where they have to be hunted for.
+  body.append(el("div", { class: "summary-line top" }, [
+    el("span", {}, [plural(t.count, "transaction"), rows.length !== all.length
+      ? el("span", { class: "muted", text: ` of ${all.length.toLocaleString()}` }) : null]),
+    el("span", {}, ["Spending ", el("b", { class: t.spend < 0 ? "neg" : "", text: fmtMoney(t.spend) })]),
+    t.income ? el("span", {}, ["Income ", el("b", { class: "pos", text: fmtMoney(t.income) })]) : null,
+    t.refunds ? el("span", {}, ["Refunds ", el("b", { class: "pos", text: fmtMoney(t.refunds) })]) : null,
+    t.fees ? el("span", {}, [FEES_CATEGORY + " ", el("b", { class: "neg", text: fmtMoney(t.fees) })]) : null,
+    t.transfers ? el("span", { class: "muted" }, [
+      "Transfers ", el("b", { text: fmtMoney(t.transfers) }), " (excluded)",
+    ]) : null,
+  ]));
+
+  body.append(el("div", { class: "scroll", style: "max-height:calc(100vh - 400px)" }, [
     el("table", { class: "tbl" }, [
       el("thead", {}, el("tr", {}, [
         el("th", { class: "pick" }, toggleAll),
@@ -2746,19 +2813,6 @@ function renderTransactions() {
       ]))),
     ]),
   ]));
-
-  const line = el("div", { class: "summary-line" }, [
-    el("span", {}, [plural(t.count, "transaction"), rows.length !== all.length
-      ? el("span", { class: "muted", text: ` of ${all.length.toLocaleString()}` }) : null]),
-    el("span", {}, ["Spending ", el("b", { class: t.spend < 0 ? "neg" : "", text: fmtMoney(t.spend) })]),
-    t.income ? el("span", {}, ["Income ", el("b", { class: "pos", text: fmtMoney(t.income) })]) : null,
-    t.refunds ? el("span", {}, ["Refunds ", el("b", { class: "pos", text: fmtMoney(t.refunds) })]) : null,
-    t.fees ? el("span", {}, [FEES_CATEGORY + " ", el("b", { class: "neg", text: fmtMoney(t.fees) })]) : null,
-    t.transfers ? el("span", { class: "muted" }, [
-      "Transfers ", el("b", { text: fmtMoney(t.transfers) }), " (excluded)",
-    ]) : null,
-  ]);
-  body.append(line);
 
   if (!showAll && rows.length > state.rowLimit) {
     body.append(el("p", { class: "small muted" }, [
@@ -3532,7 +3586,7 @@ function renderDataView() {
       el("dt", { text: "Uncategorized" }),  el("dd", { text: String(s.uncategorized) }),
     ]),
     el("p", { class: "small muted", style: "margin-top:10px",
-      text: "Categories and rules get filled in at build step 4. Nothing is guessed for you." }),
+      text: "Categories and rules are yours to set on the Categorize tab. Nothing is guessed for you." }),
   ]));
 
   body.append(cols);
@@ -3815,6 +3869,7 @@ window.__finance = {
   ruleMatches,
   totalsFor,
   filteredTransactions,
+  filterDescription,
   sortTransactions,
   FEES_CATEGORY,
   TRANSFER_CATEGORY,
