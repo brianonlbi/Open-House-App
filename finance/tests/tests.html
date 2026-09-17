@@ -1245,6 +1245,37 @@ async function run(API) {
     API.state.data = save;
   }
 
+  describe("creating a category by typing");
+  {
+    const data = API.migrate({ transactions: [
+      { id: "a", date: "2026-01-01", amount: -30, description: "SAMPLE FUEL# 497", type: "expense" },
+    ]});
+    API.recategorizeAll(data);
+    deepEq("starts with none of your own", data.categories, []);
+
+    // Typing a name that has never been used creates it.
+    API.addRule(data, "SAMPLE FUEL", "Gas");
+    ok("a brand new name is created on use", data.categories.includes("Gas"));
+    eq("and applied", data.transactions[0].category, "Gas");
+
+    // Registering one up front, before it is used anywhere.
+    API.ensureCategory(data, "Groceries");
+    ok("a category can exist before anything is in it", data.categories.includes("Groceries"));
+    eq("with nothing in it yet",
+       API.categoryUsage(data).find(([n]) => n === "Groceries")[1], 0);
+
+    API.ensureCategory(data, "Groceries");
+    eq("adding the same name twice does not duplicate it",
+       data.categories.filter((c) => c === "Groceries").length, 1);
+
+    API.ensureCategory(data, "   ");
+    ok("blank names are ignored", !data.categories.includes("   "));
+
+    // Overriding a single transaction to a new name creates it too.
+    API.setOverride(data, data.transactions[0], "Snacks");
+    ok("typing onto one transaction creates the name", data.categories.includes("Snacks"));
+  }
+
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");
   summary.className = failed ? "fail" : "pass";

@@ -579,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.7.0";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.7.1";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -3298,16 +3298,32 @@ function categoryInput(value, onCommit, placeholder) {
   const listId = "category-names";
   const input = el("input", {
     class: "text", list: listId, value: value || "", size: "18",
-    placeholder: placeholder || "category…",
+    placeholder: placeholder || "type a name…",
+    title: "Type any name. A category you have not used before is created as you type.",
     onkeydown: (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); } },
     onchange: (ev) => onCommit(ev.target.value.trim()),
   });
   return input;
 }
 
+/**
+ * Names offered as you type. The user's own categories come first; the rest are
+ * only autocomplete, and none of them exists until it is actually used. The
+ * list is still built from real spending — this saves typing, and makes it
+ * obvious that the field accepts anything at all rather than looking like a
+ * fixed set of three.
+ */
+const COMMON_CATEGORIES = [
+  "Groceries", "Gas", "Restaurants", "Car", "Home", "Utilities", "Insurance",
+  "Medical", "Travel", "Entertainment", "Subscriptions", "Software", "Work",
+  "Education", "Kids", "Pets", "Clothing", "Gifts", "Charity", "Taxes",
+];
+
 function categoryDatalist() {
-  const names = (state.data ? state.data.categories : []).slice().sort();
-  return el("datalist", { id: "category-names" }, names.map((n) => el("option", { value: n })));
+  const mine = (state.data ? state.data.categories : []).slice().sort();
+  const rest = COMMON_CATEGORIES.filter((n) => !mine.includes(n));
+  return el("datalist", { id: "category-names" },
+    mine.concat(rest).map((n) => el("option", { value: n })));
 }
 
 /** After a save, put the view back where it was rather than scrolling to top. */
@@ -3352,6 +3368,11 @@ function renderCategorize() {
       "transaction across every account — past and future. Work down from the top and the " +
       "biggest numbers get answered first. The rule text is editable: shortening it is how one " +
       "rule catches a merchant that bills under several spellings."));
+    panel.append(el("p", { class: "small muted", style: "margin-top:-4px" }, [
+      el("strong", { text: "Type any name you like. " }),
+      "The box is not a fixed list — a category you have not used before is created the " +
+      "moment you type it. The suggestions only save typing.",
+    ]));
 
     const shown = groups.slice(0, state.backlogLimit);
     const rows = shown.map((group) => {
@@ -3487,10 +3508,27 @@ function renderCategorize() {
   const cols = el("div", { class: "cols" });
 
   const usage = categoryUsage(data);
+  const addBox = categoryInput("", (value) => {
+    if (!value) return;
+    if (data.categories.includes(value)) { toast(`"${value}" already exists.`); return; }
+    ensureCategory(data, value);
+    state.dirty = true;
+    toast(`Category "${value}" added. Use it on any transaction or rule.`);
+    afterEdit();
+  }, "new category…");
+
   cols.append(el("div", { class: "panel" }, [
     el("h3", { text: `Categories (${usage.length})` }),
     el("p", { class: "small muted",
       text: "Renaming updates every rule and override that refers to it." }),
+    el("div", { class: "row", style: "margin:8px 0" }, [
+      addBox,
+      el("button", {
+        class: "btn",
+        onclick: () => { addBox.dispatchEvent(new Event("change")); },
+      }, "Add category"),
+      el("span", { class: "small muted", text: "or type one straight onto a transaction" }),
+    ]),
     el("div", { class: "scroll", style: "margin-top:8px;max-height:300px" },
       el("table", { class: "tbl" }, [
         el("thead", {}, el("tr", {}, [
