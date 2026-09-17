@@ -369,6 +369,66 @@ svg.chart .collabel {
 .charttip .v { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; }
 .charttip .s { color: var(--text-faint); }
 
+/* --------------------------------------------------- category swatches */
+/* Eight categorical hues, fixed order, validated for both surfaces.
+   Slot 0 is the neutral for "uncategorized" and for anything past eight —
+   a ninth hue would collide with one that already means something. */
+:root {
+  --cat-0: #b9bec6;
+  --cat-1: #2a78d6;  --cat-2: #eb6834;  --cat-3: #1baf7a;  --cat-4: #eda100;
+  --cat-5: #e87ba4;  --cat-6: #008300;  --cat-7: #4a3aa7;  --cat-8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --cat-0: #4a505a;
+    --cat-1: #3987e5;  --cat-2: #d95926;  --cat-3: #199e70;  --cat-4: #c98500;
+    --cat-5: #d55181;  --cat-6: #008300;  --cat-7: #9085e9;  --cat-8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  --cat-0: #4a505a;
+  --cat-1: #3987e5;  --cat-2: #d95926;  --cat-3: #199e70;  --cat-4: #c98500;
+  --cat-5: #d55181;  --cat-6: #008300;  --cat-7: #9085e9;  --cat-8: #e66767;
+}
+.cdot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 6px; flex: none; vertical-align: baseline;
+  background: var(--cat-0);
+}
+.cdot-1 { background: var(--cat-1); }  .cdot-2 { background: var(--cat-2); }
+.cdot-3 { background: var(--cat-3); }  .cdot-4 { background: var(--cat-4); }
+.cdot-5 { background: var(--cat-5); }  .cdot-6 { background: var(--cat-6); }
+.cdot-7 { background: var(--cat-7); }  .cdot-8 { background: var(--cat-8); }
+table.tbl td.catcell { white-space: nowrap; }
+table.tbl td.catcell .cell-input, table.tbl td.catcell input.text { display: inline-block; width: auto; }
+
+/* ------------------------------------------------------------ what's due */
+.duelist { margin-top: 10px; }
+.duemonth {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); margin: 10px 0 4px;
+}
+.due {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  appearance: none; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  background: none; border: 0; border-bottom: 1px solid var(--border);
+  padding: 5px 4px;
+}
+.due:hover { background: var(--bg-hover); }
+.due .day {
+  display: flex; flex-direction: column; align-items: center; width: 34px; flex: none;
+}
+.due .day b { font-family: var(--mono); font-size: 15px; line-height: 1; }
+.due .day i { font-style: normal; font-size: 10px; color: var(--text-faint); }
+.due .who { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.due .who > span:nth-child(2) {
+  font-family: var(--mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.due .amt { font-size: 13px; white-space: nowrap; }
+.rising { color: var(--warn); font-weight: 600; }
+table.tbl tr.faded td { opacity: .55; }
+
 /* ------------------------------------------------- category share bars */
 td.barcell { width: 34%; padding-right: 12px; }
 td.barcell .bar {
@@ -425,6 +485,7 @@ kbd {
   <nav class="tabs" role="tablist" aria-label="Views">
     <button class="tab" role="tab" data-view="overview"     aria-selected="false">Overview</button>
     <button class="tab" role="tab" data-view="transactions" aria-selected="false">Transactions</button>
+    <button class="tab" role="tab" data-view="recurring"    aria-selected="false">Recurring</button>
     <button class="tab" role="tab" data-view="categorize"   aria-selected="false">Categorize</button>
     <button class="tab" role="tab" data-view="questions"    aria-selected="false">Questions</button>
     <button class="tab" role="tab" data-view="data"         aria-selected="true">Data file</button>
@@ -452,6 +513,15 @@ kbd {
   <section class="view" id="view-transactions" role="tabpanel">
     <div class="view-head"><h2>Transactions</h2><span class="hint" id="tx-count-hint"></span></div>
     <div id="transactions-body"></div>
+  </section>
+
+  <!-- =========================================================== RECURRING -->
+  <section class="view" id="view-recurring" role="tabpanel">
+    <div class="view-head">
+      <h2>Recurring</h2>
+      <span class="hint" id="recurring-hint"></span>
+    </div>
+    <div id="recurring-body"></div>
   </section>
 
   <!-- ========================================================== CATEGORIZE -->
@@ -495,6 +565,7 @@ kbd {
   <span id="st-uncat"></span>
   <span class="spacer"></span>
   <span id="st-saved">never saved</span>
+  <span id="st-build" title="Which build of the app this is"></span>
 </footer>
 
 <div id="drop-overlay">Drop a .csv statement to import it</div>
@@ -508,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.1.0";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.7.0";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -537,6 +608,7 @@ const state = {
   rowLimit: 500,       // rendered rows before "show all"; keeps a big file responsive
   backlogLimit: 40,    // uncategorized merchants shown before "show more"
   overview: { month: "", account: "" },
+  recurring: { show: "active" },
   selected: new Set(), // transaction ids ticked for a bulk change
   suggestRule: null,   // { match, category, count } offered after a manual recategorize
 };
@@ -1837,6 +1909,7 @@ function render() {
   renderDataView();
   renderOverview();
   renderTransactions();
+  renderRecurring();
   renderCategorize();
   renderQuestions();
 }
@@ -1879,6 +1952,7 @@ function renderStatusBar() {
   $("#st-uncat").textContent    = s.uncategorized
     ? `${s.uncategorized.toLocaleString()} uncategorized` : "";
   $("#st-uncat").className      = s.uncategorized ? "warnish" : "";
+  $("#st-build").textContent    = "v" + APP_VERSION;
   $("#st-saved").textContent    = state.lastSaved
     ? "saved " + fmtDateTime(state.lastSaved)
     : (state.mode === "none" ? "never saved" : "not yet saved this session");
@@ -2378,8 +2452,8 @@ function renderOverview() {
             category: entry.category, account,
           }),
         }, [
-          el("td", { class: "small" + (entry.category === UNCATEGORIZED ? " muted" : ""),
-                     text: entry.category }),
+          el("td", { class: "small" + (entry.category === UNCATEGORIZED ? " muted" : "") },
+            [categoryDot(entry.category), el("span", { text: entry.category })]),
           el("td", { class: "num", text: String(entry.count) }),
           el("td", { class: "barcell" },
             el("div", { class: "bar", style: `width:${Math.max(2, (Math.abs(entry.total) / worst) * 100)}%` })),
@@ -2803,7 +2877,7 @@ function renderTransactions() {
           title: tx.description,
           text: state.filters.raw ? tx.description : (tx.merchant || tx.description),
         }),
-        el("td", {}, categoryCell(tx)),
+        el("td", { class: "catcell" }, [categoryDot(tx.category), categoryCell(tx)]),
         el("td", {}, notesCell(tx)),
         el("td", {}, tx.type === "transfer"
           ? el("span", { class: "tag transfer", text: "transfer" })
@@ -2823,6 +2897,398 @@ function renderTransactions() {
       }, `Show all ${rows.length.toLocaleString()}`),
     ]));
   }
+}
+
+/* ----------------------------------------------------------- recurring */
+
+const DAY_MS = 86400000;
+const asDate = (iso) => Date.parse(String(iso).slice(0, 10) + "T00:00:00Z");
+const daysBetween = (a, b) => Math.round((asDate(b) - asDate(a)) / DAY_MS);
+const addDays = (iso, n) => new Date(asDate(iso) + n * DAY_MS).toISOString().slice(0, 10);
+
+function median(numbers) {
+  if (!numbers.length) return 0;
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * The shapes a repeating charge comes in.
+ *
+ * `monthly` and `every 4 weeks` overlap badly — 28 days versus ~30.4 — so they
+ * are told apart by whether the day of the month holds steady. A subscription
+ * billed "the 14th" is monthly; one billed every 28 days walks backwards
+ * through the calendar.
+ */
+const CADENCES = [
+  { id: "weekly",       label: "weekly",        days: 7,     tol: 2,  perYear: 52 },
+  { id: "fortnightly",  label: "every 2 weeks", days: 14,    tol: 3,  perYear: 26 },
+  { id: "four_weekly",  label: "every 4 weeks", days: 28,    tol: 3,  perYear: 13 },
+  { id: "monthly",      label: "monthly",       days: 30.44, tol: 6,  perYear: 12 },
+  { id: "two_monthly",  label: "every 2 months", days: 61,   tol: 8,  perYear: 6 },
+  { id: "quarterly",    label: "quarterly",     days: 91,    tol: 12, perYear: 4 },
+  { id: "half_yearly",  label: "twice a year",  days: 182,   tol: 20, perYear: 2 },
+  { id: "yearly",       label: "yearly",        days: 365,   tol: 35, perYear: 1 },
+];
+
+const ordinal = (n) => {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+
+/** Same day next month, clamped when the month is short (the 31st → the 30th). */
+function addMonthsKeepingDay(iso, months, day) {
+  const d = new Date(asDate(iso));
+  const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  return target.toISOString().slice(0, 10);
+}
+
+/**
+ * Work out which charges repeat, how often, and what the next one should be.
+ *
+ * Deliberately conservative: a merchant you visit often but irregularly — a gas
+ * station, a supermarket — is *frequent*, not *recurring*, and calling it a
+ * subscription would make the forecast useless. Regularity is judged on how
+ * consistent the gaps are, not on how many charges there are.
+ */
+function recurringCharges(data, today) {
+  const now = today || new Date().toISOString().slice(0, 10);
+  const groups = new Map();
+
+  for (const tx of (data ? data.transactions : [])) {
+    if (tx.type === "transfer" || tx.type === "income") continue;
+    if (tx.amount >= 0) continue;                    // refunds are not subscriptions
+    const key = merchantKey(tx);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(tx);
+  }
+
+  const found = [];
+
+  for (const [key, rows] of groups) {
+    if (rows.length < 3) continue;
+
+    rows.sort((a, b) => (a.date < b.date ? -1 : 1));
+    const dates = rows.map((t) => t.date);
+    const amounts = rows.map((t) => Math.abs(t.amount));
+
+    const gaps = [];
+    for (let i = 1; i < dates.length; i++) gaps.push(daysBetween(dates[i - 1], dates[i]));
+    const gap = median(gaps.filter((g) => g > 0));
+    if (!gap) continue;
+
+    // Is the day of the month steady? That is what makes something "the 14th".
+    const doms = dates.map((d) => Number(d.slice(8, 10)));
+    const domCounts = new Map();
+    for (const d of doms) domCounts.set(d, (domCounts.get(d) || 0) + 1);
+    let modalDom = doms[0], modalHits = 0;
+    for (const [d, n] of domCounts) if (n > modalHits) { modalDom = d; modalHits = n; }
+    const nearModal = doms.filter((d) => Math.abs(d - modalDom) <= 2 ||
+                                         Math.abs(d - modalDom) >= 28).length;
+    const domSteady = nearModal / doms.length >= 0.6;
+
+    // Pick the cadence whose period best fits, preferring monthly when the day
+    // of the month holds — that is the difference between "monthly" and "every
+    // four weeks", which are only two days apart.
+    let cadence = null, best = Infinity;
+    for (const option of CADENCES) {
+      const distance = Math.abs(gap - option.days);
+      if (distance > option.tol) continue;
+      const score = distance - (option.id === "monthly" && domSteady ? 3 : 0);
+      if (score < best) { best = score; cadence = option; }
+    }
+    if (!cadence) continue;
+
+    // How many gaps actually land on that cadence?
+    const onBeat = gaps.filter((g) => Math.abs(g - cadence.days) <= cadence.tol).length;
+    const regularity = gaps.length ? onBeat / gaps.length : 0;
+    if (regularity < 0.6) continue;
+
+    const typical = median(amounts);
+    const spread = amounts.filter(
+      (a) => Math.abs(a - typical) <= Math.max(1, typical * 0.15)).length / amounts.length;
+    const amountSteady = spread >= 0.7;
+
+    // A shop visited every week or two at varying prices is frequent, not
+    // subscribed. Without this a gas station reads as an $800-a-year
+    // subscription, and a forecast full of those is worse than no forecast.
+    if (cadence.days < 20 && !amountSteady) continue;
+
+    // What the next one will actually cost. Prices drift over two years of
+    // history, so the all-time median understates a subscription that has gone
+    // up — the last few charges are the honest forecast.
+    const recent = amounts.slice(-3);
+    const expected = median(recent);
+
+    const last = dates[dates.length - 1];
+    const sinceLast = daysBetween(last, now);
+    const active = sinceLast <= cadence.days * 1.8;
+
+    // Next expected: keep the day of the month when it is the defining feature,
+    // otherwise just add the period. Roll forward past today so the answer is
+    // always "the next one", never one that has already been and gone.
+    let next = cadence.id === "monthly" && domSteady
+      ? addMonthsKeepingDay(last, 1, modalDom)
+      : addDays(last, Math.round(cadence.days));
+    let guard = 0;
+    while (next < now && guard++ < 400) {
+      next = cadence.id === "monthly" && domSteady
+        ? addMonthsKeepingDay(next, 1, modalDom)
+        : addDays(next, Math.round(cadence.days));
+    }
+
+    found.push({
+      key,
+      rows,
+      count: rows.length,
+      cadence: cadence.id,
+      cadenceLabel: cadence.label + (cadence.id === "monthly" && domSteady
+        ? `, the ${ordinal(modalDom)}` : ""),
+      dayOfMonth: cadence.id === "monthly" && domSteady ? modalDom : null,
+      typical: Math.round(typical * 100) / 100,
+      expected: Math.round(expected * 100) / 100,
+      low: Math.round(Math.min(...amounts) * 100) / 100,
+      high: Math.round(Math.max(...amounts) * 100) / 100,
+      amountSteady,
+      // Forward-looking, from the recent price rather than the all-time median.
+      perMonth: Math.round((expected * cadence.perYear / 12) * 100) / 100,
+      perYear: Math.round(expected * cadence.perYear * 100) / 100,
+      rising: expected > typical * 1.15,
+      first: dates[0],
+      last,
+      next,
+      sinceLast,
+      active,
+      regularity,
+      confident: regularity >= 0.7 && rows.length >= 4 && amountSteady,
+      category: rows[rows.length - 1].category,
+      accounts: [...new Set(rows.map((t) => t.account))],
+      sample: rows[rows.length - 1],
+    });
+  }
+
+  return found.sort((a, b) => b.perYear - a.perYear);
+}
+
+/** What is due between today and `days` from now, soonest first. */
+function upcomingCharges(recurring, days, today) {
+  const now = today || new Date().toISOString().slice(0, 10);
+  const until = addDays(now, days);
+  return recurring
+    .filter((r) => r.active && r.next >= now && r.next <= until)
+    .sort((a, b) => (a.next < b.next ? -1 : a.next > b.next ? 1 : b.expected - a.expected));
+}
+
+/** Run-rate totals across a set of recurring charges. */
+function recurringTotals(recurring) {
+  const active = recurring.filter((r) => r.active);
+  const round = (n) => Math.round(n * 100) / 100;
+  return {
+    count: active.length,
+    lapsed: recurring.length - active.length,
+    perMonth: round(active.reduce((sum, r) => sum + r.perMonth, 0)),
+    perYear: round(active.reduce((sum, r) => sum + r.perYear, 0)),
+  };
+}
+
+/* ------------------------------------------------------- category colours */
+
+/**
+ * Eight categorical hues, in fixed order, validated for both surfaces with the
+ * palette checker (worst adjacent CVD ΔE 9.1 light / 8.4 dark).
+ *
+ * Assignment is by a category's position in `data.categories` — its insertion
+ * order — never by rank or by how much it currently holds. Colour has to follow
+ * the thing, not its row number: if filtering repainted the survivors, someone
+ * who learned "Gas is orange" would be misled. Past eight, categories take the
+ * neutral swatch rather than cycling a hue that already means something else.
+ */
+const CATEGORY_SLOTS = 8;
+
+function categorySlot(name) {
+  const list = (state.data && state.data.categories) || [];
+  const index = list.indexOf(name);
+  if (index < 0 || index >= CATEGORY_SLOTS) return 0;   // 0 = neutral
+  return index + 1;
+}
+
+/** A colour swatch beside a category name. Identity rides the dot; the text
+ *  keeps its normal ink, and no chart mark is recoloured by category. */
+function categoryDot(name) {
+  if (!name || name === UNCATEGORIZED) {
+    return el("span", { class: "cdot cdot-0", title: "not categorized yet" });
+  }
+  return el("span", { class: "cdot cdot-" + categorySlot(name), title: name });
+}
+
+/* ------------------------------------------------------- recurring view */
+
+function renderRecurring() {
+  const body = $("#recurring-body");
+  body.textContent = "";
+  const data = state.data;
+
+  if (!data || !data.transactions.length) {
+    $("#recurring-hint").textContent = "";
+    body.append(emptyState(
+      "Nothing to look at yet",
+      "Import a statement and this works out what repeats — what you pay every month, " +
+      "on which day, and what it adds up to over a year. It does not need categories.",
+      true,
+    ));
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const all = recurringCharges(data, today);
+  const totals = recurringTotals(all);
+  const upcoming = upcomingCharges(all, 45, today);
+
+  $("#recurring-hint").textContent = totals.count
+    ? `${plural(totals.count, "repeating charge")} · ${fmtMoney(-totals.perMonth)} a month`
+    : "nothing repeating found yet";
+
+  if (!all.length) {
+    body.append(el("div", { class: "empty" }, [
+      el("h2", { text: "Nothing repeats yet" }),
+      el("p", { class: "small" },
+        "A charge needs to appear at least three times at a steady interval before it counts " +
+        "as recurring. Import more history and it will find more."),
+    ]));
+    return;
+  }
+
+  /* ------------------------------------------------------------ tiles */
+  const dueSoon = upcomingCharges(all, 30, today);
+  const dueSoonTotal = dueSoon.reduce((sum, r) => sum + r.expected, 0);
+
+  body.append(el("div", { class: "stats" }, [
+    statTile({
+      label: "Repeating charges", value: String(totals.count),
+      sub: el("span", { class: "muted", text: "still active" }),
+      onclick: () => { state.recurring.show = "active"; renderRecurring(); },
+    }),
+    statTile({
+      label: "Every month", value: fmtMoney(-totals.perMonth),
+      sub: el("span", { class: "muted", text: "at current prices" }),
+    }),
+    statTile({
+      label: "Every year", value: fmtMoney(-totals.perYear),
+      sub: el("span", { class: "muted", text: "if nothing changes" }),
+    }),
+    statTile({
+      label: "Due in the next 30 days", value: fmtMoney(-dueSoonTotal),
+      sub: el("span", { class: "muted", text: plural(dueSoon.length, "charge") }),
+    }),
+    totals.lapsed ? statTile({
+      label: "Stopped", value: String(totals.lapsed),
+      sub: el("span", { class: "muted", text: "no longer charging" }),
+      onclick: () => { state.recurring.show = "lapsed"; renderRecurring(); },
+    }) : null,
+  ]));
+
+  /* -------------------------------------------------------- coming up */
+  if (upcoming.length) {
+    const cal = el("div", { class: "panel" }, [
+      el("h3", { text: "Coming up" }),
+      el("p", { class: "small muted",
+        text: "Worked out from the date each charge usually lands. Nothing here is a bill the " +
+              "app has seen — it is what the pattern says to expect." }),
+    ]);
+
+    let lastMonth = "";
+    const list = el("div", { class: "duelist" });
+    for (const r of upcoming) {
+      const month = monthLabel(monthOf(r.next));
+      if (month !== lastMonth) {
+        list.append(el("div", { class: "duemonth", text: month }));
+        lastMonth = month;
+      }
+      const daysAway = daysBetween(today, r.next);
+      list.append(el("button", {
+        class: "due",
+        onclick: () => drillTo({ q: suggestMatch(r.rows) }),
+        title: "Show every charge from this merchant",
+      }, [
+        el("span", { class: "day" }, [
+          el("b", { text: String(Number(r.next.slice(8, 10))) }),
+          el("i", { text: new Date(r.next + "T00:00:00").toLocaleDateString(undefined, { weekday: "short" }) }),
+        ]),
+        el("span", { class: "who" }, [
+          categoryDot(r.category),
+          el("span", { text: r.key }),
+          el("span", { class: "when small muted", text:
+            daysAway === 0 ? "today" : daysAway === 1 ? "tomorrow" : `in ${daysAway} days` }),
+        ]),
+        el("span", { class: "num amt", text: fmtMoney(-r.expected) }),
+      ]));
+    }
+    cal.append(list);
+    body.append(cal);
+  }
+
+  /* ----------------------------------------------------- the full list */
+  const show = state.recurring.show;
+  const shown = all.filter((r) => show === "all" || (show === "lapsed" ? !r.active : r.active));
+  const worst = Math.max(...all.map((r) => r.perYear), 1);
+
+  const panel = el("div", { class: "panel" });
+  panel.append(el("div", { class: "row" }, [
+    el("h3", { text: "Everything that repeats" }),
+    el("span", { class: "spacer", style: "flex:1" }),
+    el("select", {
+      class: "text",
+      onchange: (ev) => { state.recurring.show = ev.target.value; renderRecurring(); },
+    }, [["active", "Still active"], ["lapsed", "Stopped"], ["all", "Everything"]].map(
+      ([v, t]) => el("option", { value: v, selected: show === v, text: t }))),
+  ]));
+  panel.append(el("p", { class: "small muted",
+    text: "Biggest yearly cost first — the order to review them in if you are looking for " +
+          "something to cancel. Click a row for every charge behind it." }));
+
+  panel.append(el("div", { class: "scroll", style: "margin-top:10px;max-height:520px" },
+    el("table", { class: "tbl" }, [
+      el("thead", {}, el("tr", {}, [
+        el("th", { text: "What" }), el("th", { text: "How often" }),
+        el("th", { text: "Next" }), el("th", { text: "Each time", style: "text-align:right" }),
+        el("th", { text: "A month", style: "text-align:right" }),
+        el("th", { text: "A year", style: "text-align:right" }),
+        el("th", { text: "Share of it" }), el("th", { text: "Seen" }),
+      ])),
+      el("tbody", {}, shown.map((r) => el("tr", {
+        class: "clickable" + (r.active ? "" : " faded"),
+        onclick: () => drillTo({ q: suggestMatch(r.rows) }),
+      }, [
+        el("td", {}, [categoryDot(r.category), el("span", { class: "desc", text: r.key })]),
+        el("td", { class: "small muted", text: r.cadenceLabel }),
+        el("td", { class: "date small", text: r.active ? r.next : "—" }),
+        el("td", { class: "num" }, [
+          el("span", { text: fmtMoney(-r.expected) }),
+          r.rising ? el("span", { class: "rising", title:
+            `was typically ${fmtMoney(-r.typical)}`, text: " ↑" }) : null,
+        ]),
+        el("td", { class: "num muted", text: fmtMoney(-r.perMonth) }),
+        el("td", { class: "num neg", text: fmtMoney(-r.perYear) }),
+        el("td", { class: "barcell" },
+          el("div", { class: "bar", style: `width:${Math.max(2, (r.perYear / worst) * 100)}%` })),
+        el("td", { class: "small muted", text: `${r.count}× since ${r.first.slice(0, 7)}` }),
+      ]))),
+    ])));
+
+  if (show === "active" && totals.lapsed) {
+    panel.append(el("p", { class: "small muted", style: "margin-top:8px" }, [
+      `${plural(totals.lapsed, "charge")} stopped coming. `,
+      el("button", {
+        class: "btn link",
+        onclick: () => { state.recurring.show = "lapsed"; renderRecurring(); },
+      }, "Show those instead"),
+      " — worth a look: a subscription that stopped may have moved to another card.",
+    ]));
+  }
+  body.append(panel);
 }
 
 /* --------------------------------------------------------- categorize view */
@@ -3031,13 +3497,13 @@ function renderCategorize() {
           el("th", { text: "Category" }), el("th", { text: "Rows" }), el("th", { text: "" }),
         ])),
         el("tbody", {}, usage.map(([name, count]) => el("tr", {}, [
-          el("td", {}, el("input", {
+          el("td", { class: "catcell" }, [categoryDot(name), el("input", {
             class: "text", value: name, size: "18",
             onchange: (ev) => {
               renameCategory(data, name, ev.target.value);
               state.dirty = true; afterEdit();
             },
-          })),
+          })]),
           el("td", { class: "num", text: String(count) }),
           el("td", {}, count === 0
             ? el("button", {
@@ -3839,6 +4305,16 @@ window.__finance = {
   parserFromSpec,
   makeCsvParser,
   allParsers,
+  // recurring
+  categorySlot,
+  recurringCharges,
+  upcomingCharges,
+  recurringTotals,
+  daysBetween,
+  addDays,
+  addMonthsKeepingDay,
+  median,
+  CADENCES,
   // build step 6
   monthOf,
   monthLabel,

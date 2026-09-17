@@ -1107,6 +1107,144 @@ async function run(API) {
     API.state.filters = save;
   }
 
+  describe("recurring: a steady monthly charge");
+  {
+    // The 14th of each month, and the price went up part-way through.
+    const rows = [];
+    const amounts = { "2026-04": 20, "2026-05": 20, "2026-06": 20, "2026-07": 29.5, "2026-08": 59, "2026-09": 59 };
+    let i = 0;
+    for (const [m, amt] of Object.entries(amounts)) {
+      rows.push({ id: "r" + i++, date: `${m}-14`, amount: -amt, type: "expense",
+                  description: "SAMPLE REEL", account: "a", category: "Software" });
+    }
+    const data = API.migrate({ transactions: rows });
+    const found = API.recurringCharges(data, "2026-09-17");
+    eq("one repeating charge found", found.length, 1);
+    const r = found[0];
+    eq("monthly, and it names the day", r.cadenceLabel, "monthly, the 14th");
+    eq("the day of the month is captured", r.dayOfMonth, 14);
+    eq("next one is next month, same day", r.next, "2026-10-14");
+    eq("the expected amount is the current price, not the all-time median", r.expected, 59);
+    eq("while the all-time median is still available", r.typical, 24.75);
+    ok("and it is flagged as having gone up", r.rising);
+    eq("per month uses the current price", r.perMonth, 59);
+    eq("per year too", r.perYear, 708);
+    eq("still active", r.active, true);
+  }
+
+  describe("recurring: cadences other than monthly");
+  {
+    const make = (dates, amount, desc) => API.migrate({ transactions: dates.map((d, i) => ({
+      id: desc + i, date: d, amount: -amount, type: "expense", description: desc, account: "a" }))});
+
+    const weekly = API.recurringCharges(
+      make(["2026-08-03","2026-08-10","2026-08-17","2026-08-24","2026-08-31"], 12, "SAMPLE WEEKLY"), "2026-09-02");
+    eq("weekly is recognised", weekly[0].cadence, "weekly");
+    eq("52 a year", weekly[0].perYear, 624);
+
+    const yearly = API.recurringCharges(
+      make(["2024-03-02","2025-03-01","2026-03-03"], 240, "SAMPLE ANNUAL"), "2026-09-17");
+    eq("yearly is recognised", yearly[0].cadence, "yearly");
+    eq("next one is a year on", yearly[0].next.slice(0, 4), "2027");
+    eq("and it costs that once a year", yearly[0].perYear, 240);
+
+    const quarterly = API.recurringCharges(
+      make(["2025-10-05","2026-01-05","2026-04-05","2026-07-05"], 90, "SAMPLE QUARTERLY"), "2026-09-17");
+    eq("quarterly is recognised", quarterly[0].cadence, "quarterly");
+    eq("four times a year", quarterly[0].perYear, 360);
+  }
+
+  describe("recurring: what must NOT be called a subscription");
+  {
+    const irregular = API.migrate({ transactions: [
+      // a shop visited often, at wildly different prices — frequent, not subscribed
+      { id: "1", date: "2026-08-02", amount: -34.41, type: "expense", description: "SAMPLE FUEL# 497" },
+      { id: "2", date: "2026-08-09", amount: -12.10, type: "expense", description: "SAMPLE FUEL# 497" },
+      { id: "3", date: "2026-08-21", amount: -56.00, type: "expense", description: "SAMPLE FUEL# 497" },
+      { id: "4", date: "2026-08-28", amount: -8.75,  type: "expense", description: "SAMPLE FUEL# 497" },
+      { id: "5", date: "2026-09-04", amount: -41.20, type: "expense", description: "SAMPLE FUEL# 497" },
+    ]});
+    eq("a frequent shop at varying prices is not recurring",
+       API.recurringCharges(irregular, "2026-09-17").length, 0);
+
+    const twice = API.migrate({ transactions: [
+      { id: "1", date: "2026-07-01", amount: -10, type: "expense", description: "SAMPLE TWICE" },
+      { id: "2", date: "2026-08-01", amount: -10, type: "expense", description: "SAMPLE TWICE" },
+    ]});
+    eq("two charges is not yet a pattern", API.recurringCharges(twice, "2026-09-17").length, 0);
+
+    const scattered = API.migrate({ transactions: [
+      { id: "1", date: "2026-01-03", amount: -50, type: "expense", description: "SAMPLE RANDOM" },
+      { id: "2", date: "2026-02-20", amount: -50, type: "expense", description: "SAMPLE RANDOM" },
+      { id: "3", date: "2026-07-11", amount: -50, type: "expense", description: "SAMPLE RANDOM" },
+    ]});
+    eq("same price at random intervals is not recurring",
+       API.recurringCharges(scattered, "2026-09-17").length, 0);
+
+    const transfers = API.migrate({ transactions: [1,2,3,4].map((n) => ({
+      id: "t" + n, date: `2026-0${n + 2}-05`, amount: 500, type: "transfer",
+      description: "Payment Thank You" }))});
+    eq("card payments are never subscriptions", API.recurringCharges(transfers, "2026-09-17").length, 0);
+  }
+
+  describe("recurring: stopped charges");
+  {
+    const data = API.migrate({ transactions: ["2025-01-11","2025-02-11","2025-03-11","2025-04-11"].map(
+      (d, i) => ({ id: "s" + i, date: d, amount: -25, type: "expense", description: "SAMPLE GONE" }))});
+    const found = API.recurringCharges(data, "2026-09-17");
+    eq("still detected", found.length, 1);
+    eq("but marked as stopped", found[0].active, false);
+    eq("stopped ones are not in the run-rate", API.recurringTotals(found).perMonth, 0);
+    eq("and are counted separately", API.recurringTotals(found).lapsed, 1);
+    deepEq("nor in what is coming up", API.upcomingCharges(found, 45, "2026-09-17"), []);
+  }
+
+  describe("recurring: the month-end clamp");
+  {
+    eq("the 31st in a 30-day month", API.addMonthsKeepingDay("2026-08-31", 1, 31), "2026-09-30");
+    eq("the 31st in February", API.addMonthsKeepingDay("2026-01-31", 1, 31), "2026-02-28");
+    eq("an ordinary day is untouched", API.addMonthsKeepingDay("2026-03-14", 1, 14), "2026-04-14");
+    eq("across a year boundary", API.addMonthsKeepingDay("2026-12-09", 1, 9), "2027-01-09");
+  }
+
+  describe("recurring: what is due next");
+  {
+    const rows = [];
+    const add = (desc, day, amount) => {
+      for (const m of ["2026-05", "2026-06", "2026-07", "2026-08"]) {
+        rows.push({ id: desc + m, date: `${m}-${day}`, amount: -amount, type: "expense", description: desc });
+      }
+    };
+    add("SAMPLE EARLY", "03", 10);
+    add("SAMPLE LATE", "26", 40);
+    const found = API.recurringCharges(API.migrate({ transactions: rows }), "2026-09-17");
+    const due = API.upcomingCharges(found, 30, "2026-09-17");
+    eq("both are due within a month", due.length, 2);
+    eq("soonest first", due[0].key, "SAMPLE LATE");
+    ok("and nothing already past is listed", due.every((r) => r.next >= "2026-09-17"));
+    eq("a short window catches only the near one", API.upcomingCharges(found, 12, "2026-09-17").length, 1);
+  }
+
+  describe("category colours follow the category, not its rank");
+  {
+    const save = API.state.data;
+    API.state.data = API.migrate({ categories: ["Gas", "Food", "Home"], transactions: [] });
+    eq("first category takes slot 1", API.categorySlot("Gas"), 1);
+    eq("second takes slot 2", API.categorySlot("Food"), 2);
+    eq("an unknown name is neutral", API.categorySlot("Nope"), 0);
+
+    // Adding more must not repaint the ones already there.
+    API.state.data.categories.push("Work", "Travel");
+    eq("Gas keeps its colour", API.categorySlot("Gas"), 1);
+    eq("Food keeps its colour", API.categorySlot("Food"), 2);
+
+    API.state.data.categories = ["A","B","C","D","E","F","G","H","I","J"];
+    eq("the eighth still gets a hue", API.categorySlot("H"), 8);
+    eq("the ninth folds to neutral rather than reusing one", API.categorySlot("I"), 0);
+    eq("and so does the tenth", API.categorySlot("J"), 0);
+    API.state.data = save;
+  }
+
   /* ------------------------------------------------------------ report */
   const summary = document.getElementById("summary");
   summary.className = failed ? "fail" : "pass";

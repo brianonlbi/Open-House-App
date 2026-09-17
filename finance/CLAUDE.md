@@ -426,6 +426,49 @@ the selected and the largest column, hit targets spanning the full slot, and a
 hover tooltip. Month ticks are counted back from the newest month so the latest
 is always labelled and the spacing stays even.
 
+### Recurring charges
+
+`recurringCharges(data, today)` finds what repeats: cadence, the day of the
+month when there is one, the next expected date, and monthly and yearly cost.
+It needs **no categories** — it works off dates and amounts alone, so it is
+useful from the first import.
+
+Three decisions hold it together:
+
+- **Regularity, not frequency.** A shop visited weekly at varying prices is
+  frequent, not subscribed. Gaps must land on a cadence at least 60% of the
+  time, and anything shorter than 20 days must also have a steady amount —
+  without that rule a gas station reads as an $800-a-year subscription and the
+  forecast becomes noise.
+- **The next charge is priced from the recent past, not the median.** Two years
+  of history means prices drift. One real subscription had gone from $20 to $59;
+  the all-time median said $44.25, which is a number that was never charged and
+  never will be. `expected` is the median of the last three, `typical` stays for
+  reference, and `rising` flags the gap.
+- **Monthly vs every-four-weeks is decided by the day of the month.** They are
+  two days apart as periods. A charge on "the 14th" is monthly; one every 28
+  days walks backwards through the calendar. `addMonthsKeepingDay` clamps the
+  31st to short months.
+
+`active` means seen within 1.8 cadences. Stopped ones stay listed but are kept
+out of the run-rate — a subscription that stopped may just have moved to another
+card, which is worth noticing.
+
+### Category colours
+
+Eight categorical hues, fixed order, validated with the dataviz checker for both
+surfaces (worst adjacent CVD ΔE 9.1 light / 8.4 dark).
+
+`categorySlot()` assigns by a category's **position in `data.categories`** — its
+insertion order — never by rank or current size. Colour follows the thing, not
+its row number: if filtering repainted the survivors, someone who learned "Gas
+is orange" would be misled. Past eight, categories take the neutral swatch
+rather than cycling a hue that already means something else.
+
+Identity rides a **dot beside the label**, never the chart marks. Magnitude bars
+stay one colour — recolouring them by category would restate the bar length and
+burn the only free channel. Text keeps text tokens.
+
 ### Building the category list
 
 `uncategorizedGroups(data)` is the heart of step 4: uncategorized transactions
@@ -512,9 +555,11 @@ Working vertical slices, stopping after each so the user can try it.
 2. ✅ One CSV parser for one account, plus dedup, importing into the data model.
 3. ✅ Transaction table with filters, separated by account.
 4. ✅ Categorization rules, the backlog, and the overrides UI.
-5. ⬜ Transfer and refund handling (cross-account matching). Needs the checking export. **Next.**
+5. ⬜ Transfer and refund handling (cross-account matching). Needs the checking export.
+   ➕ Recurring-charge detection, added out of order: the first real user asked
+   for it within an hour of using the app, and it needs no categories to work.
 6. ✅ Overview dashboard with drill-down.
-7. ⬜ Preset questions.
+7. ⬜ Preset questions. **Next.**
 8. ⬜ Optional natural language layer.
 
 Update `buildSteps()` in `finances.html` (the `doneThrough` constant) as each
