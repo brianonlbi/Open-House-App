@@ -579,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.8.1";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.9.0";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -916,6 +916,10 @@ function migrate(data) {
   // An account written by hand, or by an older version, may not say what kind
   // it is. Screens that show the kind must not be the thing that breaks.
   out.accounts = out.accounts.map((a) => Object.assign({ kind: "unknown" }, a));
+  // Rows imported before types could be ruled keep what the file said.
+  for (const tx of out.transactions) {
+    if (tx.parsed_type === undefined) tx.parsed_type = tx.type;
+  }
   return out;
 }
 
@@ -1235,9 +1239,30 @@ function resolveCategory(tx, data, parsers) {
   const parser = (parsers || allParsers(data))[tx.source_parser];
   if (parser && parser.isFee(tx.issuer_type)) return FEES_CATEGORY;
 
-  if (tx.type === "transfer") return TRANSFER_CATEGORY;
+  // What the file itself said, not a type a rule has since imposed.
+  if ((tx.parsed_type || tx.type) === "transfer") return TRANSFER_CATEGORY;
 
   return UNCATEGORIZED;
+}
+
+/**
+ * Whether a row is spending, income, or money moving between your own accounts.
+ *
+ * A credit card export labels its own payments, so the parser knows. A bank
+ * export often does not: a checking statement is a flat list where paying a
+ * card, paying the mortgage and buying groceries all look alike. Left that way,
+ * every card payment counts as spending on top of the spending already on the
+ * card — the exact double-count this app exists to avoid, and on two years of
+ * statements it is tens of thousands of dollars.
+ *
+ * So the Transfer category carries the meaning: name a row Transfer, by rule or
+ * by hand, and it stops counting as spending or income. Anything else falls
+ * back to what the file said. One idea, one place, and it re-derives from
+ * scratch like every other category does.
+ */
+function resolveType(tx) {
+  if (tx.category === TRANSFER_CATEGORY) return "transfer";
+  return tx.parsed_type || tx.type;
 }
 
 /**
@@ -1249,7 +1274,12 @@ function recategorizeAll(data) {
   // Build the parser lookup once rather than per row — a mapped parser is
   // reconstructed from its saved spec, and there can be thousands of rows.
   const parsers = allParsers(data);
-  for (const tx of data.transactions) tx.category = resolveCategory(tx, data, parsers);
+  for (const tx of data.transactions) {
+    // What the file said, kept apart from what the rules make of it.
+    if (tx.parsed_type === undefined) tx.parsed_type = tx.type;
+    tx.category = resolveCategory(tx, data, parsers);
+    tx.type = resolveType(tx);
+  }
 
   // Keep the category list in step with what is actually in use.
   const used = new Set(data.transactions.map((t) => t.category));
@@ -1401,6 +1431,22 @@ function guessMapping(header, rows) {
 
 /** Guess the sign convention from the amounts themselves. */
 /**
+ * Is this a bank account or a credit card?
+ *
+ * It decides how a positive amount is read: money into a checking account is
+ * income, while money onto a card is a refund or a payment. Getting it wrong is
+ * not a small error — two years of payroll read as refunds nets against
+ * spending and every total on the dashboard becomes fiction.
+ *
+ * Cards do not have cheque numbers or a running balance; bank exports usually
+ * have one or both. That is the whole signal, and it is a strong one.
+ */
+function guessKind(header) {
+  const bankish = /^(check|cheque)\s*(no\.?|num(ber)?|#)?$|balance/i;
+  return header.some((h) => bankish.test(String(h).trim())) ? "checking" : "credit_card";
+}
+
+/**
  * Build a test for "this row is money coming in", from the row types already
  * marked as payments or refunds. Used to read the sign convention off a
  * statement that has nothing else to read it from.
@@ -1502,6 +1548,8 @@ function beginMapping(text, filename, header, signature) {
     }
   }
 
+  const kind = guessKind(header);
+
   state.pendingMapping = {
     text, filename, header, signature, rows,
     sample: rows.slice(0, 25),
@@ -1509,7 +1557,7 @@ function beginMapping(text, filename, header, signature) {
     spec: {
       label: filename.replace(/\.[a-z]+$/i, "").replace(/[_-]+/g, " ").slice(0, 40),
       institution: "",
-      kind: "credit_card",
+      kind,
       map,
       required: [map.date, map.amount, map.description].filter(Boolean),
       moneyOut: guessMoneyOut(header, rows, map.amount,
@@ -1517,7 +1565,8 @@ function beginMapping(text, filename, header, signature) {
       transferTypes: guessed.transferTypes,
       refundTypes: guessed.refundTypes,
       feeTypes: guessed.feeTypes,
-      incomeWhenPositive: false,
+      // Money into a bank account is income; money onto a card is not.
+      incomeWhenPositive: kind !== "credit_card",
     },
   };
   state.pendingImport = null;
@@ -3482,7 +3531,10 @@ const COMMON_CATEGORIES = [
 
 function categoryDatalist() {
   const mine = (state.data ? state.data.categories : []).slice().sort();
-  const rest = COMMON_CATEGORIES.filter((n) => !mine.includes(n));
+  // Transfer is a real choice, not just something the parser produces: it is how
+  // a bank row is taken out of spending.
+  const rest = [TRANSFER_CATEGORY, FEES_CATEGORY].concat(COMMON_CATEGORIES)
+    .filter((n) => !mine.includes(n));
   return el("datalist", { id: "category-names" },
     mine.concat(rest).map((n) => el("option", { value: n })));
 }
@@ -3599,6 +3651,12 @@ function renderCategorize() {
       el("strong", { text: "Type any name you like. " }),
       "The box is not a fixed list — a category you have not used before is created the " +
       "moment you type it. The suggestions only save typing.",
+    ]));
+    panel.append(el("p", { class: "small muted", style: "margin-top:-4px" }, [
+      el("strong", { text: `One name is special: “${TRANSFER_CATEGORY}”. ` }),
+      "Use it for money moving between your own accounts — paying a credit card or a loan " +
+      "from checking, or moving money to savings. Those rows stop counting as spending, " +
+      "which matters because the spending is already on the card.",
     ]));
 
     const shown = groups.slice(0, state.backlogLimit);
@@ -4177,6 +4235,16 @@ function renderImportPreview() {
       "These stay as expenses so they reduce their category's total, rather than showing up as income.",
     ]));
   }
+  if (!imp.rows.some((t) => t.issuer_type)) {
+    panel.append(el("div", { class: "note warn" }, [
+      el("strong", { text: "This export does not say what its rows are." }),
+      "There is no row-type column, so nothing here is marked as a payment automatically. " +
+      "Paying a credit card or a loan from this account looks exactly like buying groceries, " +
+      "and counting those as spending double-counts every dollar already on the card. " +
+      "In Categorize, give those rows the category “Transfer” — by rule, so it covers all of " +
+      "them at once — and they stop counting as spending.",
+    ]));
+  }
   if (imp.flipped) {
     panel.append(el("div", { class: "note warn" }, [
       el("strong", { text: "Signs were flipped." }),
@@ -4683,6 +4751,8 @@ window.__finance = {
   guessMoneyOut,
   moneyInRow,
   fileLooksLikeAccount,
+  guessKind,
+  resolveType,
   typeValues,
   parserFromSpec,
   makeCsvParser,

@@ -579,6 +579,42 @@ is checked both ways: it fails against the pre-fix file and passes after.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
+### Bank exports do not say what their rows are
+
+A credit-card export labels its own payments. A bank export often does not: a
+checking statement is a flat list where paying a card, paying the mortgage and
+buying groceries all look identical. On the first real bank export — two years of
+statements, a couple of thousand rows — that gap was worth **tens of thousands
+of dollars** of card payments counted as spending on top of the spending already
+itemised on the cards themselves.
+
+So **the `Transfer` category carries the meaning**. Name a row Transfer, by rule
+or by hand, and `resolveType()` types it as a transfer: out of spending, out of
+income, reported on its own. Everything else falls back to what the file said,
+which is kept on the row as `parsed_type` and never overwritten. One idea, one
+place, and it re-derives from scratch exactly like every other category —
+deleting the rules puts every dollar back where the file had it, to the cent.
+
+This is why `resolveCategory()` reads `parsed_type` rather than `type`: once a
+rule can change the type, reading the current type would feed the function its
+own output.
+
+The import review says so outright when a file carries no row-type column at
+all, because the failure is otherwise silent and enormous.
+
+### An account's kind decides how a deposit is read
+
+`incomeWhenPositive` was set only by the Kind dropdown, and Kind defaulted to
+credit card. A checking account mapped without touching that dropdown read two
+years of payroll as *refunds*, which net against spending. The headline number
+came out as a plausible-looking figure that meant nothing at all: two years of
+debits minus two years of pay. A wrong number that looks reasonable is worse
+than a crash.
+
+`guessKind()` now reads it off the columns: cheque numbers and running balances
+belong to bank accounts, not cards. The guess sets `incomeWhenPositive` at the
+moment the spec is built, not only when the dropdown is touched.
+
 ### A mapping says what format a file is, not which card it came from
 
 Two store cards issued by the same bank export byte-identical columns. The

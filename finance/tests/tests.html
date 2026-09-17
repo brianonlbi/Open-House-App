@@ -1359,6 +1359,93 @@ async function run(API) {
     eq("and the now-empty account is cleared away too", data.accounts.length, 0);
   }
 
+  describe("guessKind — a bank export is not a credit card");
+  {
+    eq("a cheque number means a bank account",
+       API.guessKind(["Account Number", "Post Date", "Check", "Description", "Debit", "Credit"]), "checking");
+    eq("so does a running balance",
+       API.guessKind(["Date", "Description", "Amount", "Balance"]), "checking");
+    eq("a card export has neither",
+       API.guessKind(["Transaction Date", "Post Date", "Description", "Category", "Type", "Amount"]),
+       "credit_card");
+    eq("a word that merely contains 'check' is not a cheque column",
+       API.guessKind(["Date", "Checkout Total", "Description", "Amount"]), "credit_card");
+  }
+
+  describe("a rule can mark rows as transfers, for exports that do not say");
+  {
+    // A bank export: a flat list where paying a card looks like buying groceries.
+    const make = () => API.migrate({
+      accounts: [{ id: "chk", label: "Checking", kind: "checking" }],
+      transactions: [
+        { id: "t1", date: "2026-01-05", amount: -400, type: "expense", account: "chk",
+          description: "SAMPLE CARD ONLINE PAYMENT 1234" },
+        { id: "t2", date: "2026-01-06", amount: -60, type: "expense", account: "chk",
+          description: "SAMPLE GROCER" },
+        { id: "t3", date: "2026-01-07", amount: 2000, type: "income", account: "chk",
+          description: "SAMPLE PAYROLL" },
+      ],
+    });
+
+    const before = make();
+    API.recategorizeAll(before);
+    eq("untouched, the card payment counts as spending",
+       API.totalsFor(before.transactions).spend, -460);
+
+    const data = make();
+    API.addRule(data, "CARD ONLINE PAYMENT", "Transfer");
+    const card = data.transactions.find((x) => x.id === "t1");
+    eq("the rule retypes it", card.type, "transfer");
+    eq("and it carries the Transfer category", card.category, "Transfer");
+    eq("what the file said is still on the row", card.parsed_type, "expense");
+    eq("spending is only the spending now", API.totalsFor(data.transactions).spend, -60);
+    eq("and it is reported as a transfer", API.totalsFor(data.transactions).transfers, -400);
+    eq("income is untouched", API.totalsFor(data.transactions).income, 2000);
+
+    // Deriving from scratch is the whole point: take the rule away again.
+    data.rules = [];
+    API.recategorizeAll(data);
+    eq("removing the rule puts the type back", data.transactions[0].type, "expense");
+    eq("and the spending with it", API.totalsFor(data.transactions).spend, -460);
+
+    // One transaction at a time works the same way.
+    const byHand = make();
+    API.recategorizeAll(byHand);
+    API.setOverride(byHand, byHand.transactions.find((x) => x.id === "t3"), "Transfer");
+    API.recategorizeAll(byHand);
+    eq("an override can retype a row too", byHand.transactions[2].type, "transfer");
+    eq("so that deposit is no longer income", API.totalsFor(byHand.transactions).income, 0);
+
+    // A transfer the parser already knew about is not disturbed by any of this.
+    const issuer = API.migrate({
+      accounts: [{ id: "card", label: "Card", kind: "credit_card" }],
+      transactions: [
+        { id: "p1", date: "2026-01-05", amount: 400, type: "transfer", account: "card",
+          description: "SAMPLE PAYMENT THANK YOU" },
+      ],
+    });
+    API.recategorizeAll(issuer);
+    eq("it keeps its type", issuer.transactions[0].type, "transfer");
+    eq("and its category", issuer.transactions[0].category, "Transfer");
+    API.setOverride(issuer, issuer.transactions[0], "Debt");
+    API.recategorizeAll(issuer);
+    eq("naming it something else does not turn it back into spending",
+       issuer.transactions[0].type, "transfer");
+    eq("though the name is yours", issuer.transactions[0].category, "Debt");
+    eq("and it still never counts as spending", API.totalsFor(issuer.transactions).spend, 0);
+  }
+
+  describe("migrate backfills what the file said about each row");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "a", label: "A", kind: "checking" }],
+      transactions: [
+        { id: "x", date: "2026-01-01", amount: -5, type: "expense", account: "a", description: "SAMPLE" },
+      ],
+    });
+    eq("an older file gets its parsed type filled in", data.transactions[0].parsed_type, "expense");
+  }
+
   describe("guessMoneyOut — a statement with no purchases on it");
   {
     // A card that was only paid down: nothing but payments and zero-dollar
