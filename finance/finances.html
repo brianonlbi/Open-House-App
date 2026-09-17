@@ -579,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.7.1";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.7.2";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -822,7 +822,7 @@ async function saveToDisk() {
   }
 
   await cacheData();      // always keep the browser copy fresh
-  render();
+  renderChrome();         // a save moves no rows; do not rebuild the view
   return true;
 }
 
@@ -1903,6 +1903,13 @@ function summary() {
  * 7. Rendering
  * ======================================================================== */
 
+/** What a save actually changes: the chrome and the data-file panel. */
+function renderChrome() {
+  renderTopBar();
+  renderStatusBar();
+  renderDataView();
+}
+
 function render() {
   renderTopBar();
   renderStatusBar();
@@ -2727,7 +2734,7 @@ function renderBulkBar(rows) {
     toast(`${plural(picked.length, "transaction")} set to ${category}.`);
     state.selected.clear();
     scheduleSave();
-    render();
+    preserveUI(render);
   };
 
   return el("div", { class: "bulkbar" }, [
@@ -2749,18 +2756,20 @@ function categoryCell(tx) {
     class: "cell-input" + (pinned ? " pinned" : "") +
            (tx.category === UNCATEGORIZED ? " muted" : ""),
     list: "category-names",
+    "data-focus-key": "tx-" + tx.id,
     value: tx.category === UNCATEGORIZED ? "" : tx.category,
     placeholder: UNCATEGORIZED,
     title: pinned ? "Pinned by hand. Clear it to hand this back to the rules." : tx.category,
     onkeydown: (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); } },
     onchange: (ev) => {
+      refocusKey = ev.target.dataset.focusKey || null;
       const value = ev.target.value.trim();
       const before = tx.category;
       setOverride(state.data, tx, value);
       recategorizeAll(state.data);
       if (value && value !== before) offerRule([tx], value); else state.suggestRule = null;
       scheduleSave();
-      render();
+      preserveUI(render);
     },
   });
 }
@@ -2773,7 +2782,7 @@ function notesCell(tx) {
     onchange: (ev) => {
       tx.notes = ev.target.value;
       scheduleSave();
-      renderStatusBar();
+      renderStatusBar();   // the row is already correct; do not rebuild it
     },
   });
 }
@@ -2830,7 +2839,7 @@ function renderTransactions() {
       for (const tx of shown) {
         if (ev.target.checked) state.selected.add(tx.id); else state.selected.delete(tx.id);
       }
-      render();
+      preserveUI(render);
     },
   });
 
@@ -2867,7 +2876,7 @@ function renderTransactions() {
           type: "checkbox", checked: state.selected.has(tx.id),
           onchange: (ev) => {
             if (ev.target.checked) state.selected.add(tx.id); else state.selected.delete(tx.id);
-            render();
+            preserveUI(render);
           },
         })),
         el("td", { class: "date", text: tx.date }),
@@ -3294,14 +3303,18 @@ function renderRecurring() {
 /* --------------------------------------------------------- categorize view */
 
 /** A category picker: the existing list, plus free text for a new one. */
-function categoryInput(value, onCommit, placeholder) {
+function categoryInput(value, onCommit, placeholder, focusKey) {
   const listId = "category-names";
   const input = el("input", {
     class: "text", list: listId, value: value || "", size: "18",
+    "data-focus-key": focusKey || null,
     placeholder: placeholder || "type a name…",
     title: "Type any name. A category you have not used before is created as you type.",
     onkeydown: (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); } },
-    onchange: (ev) => onCommit(ev.target.value.trim()),
+    onchange: (ev) => {
+      refocusKey = ev.target.dataset.focusKey || null;
+      onCommit(ev.target.value.trim());
+    },
   });
   return input;
 }
@@ -3326,10 +3339,76 @@ function categoryDatalist() {
     mine.concat(rest).map((n) => el("option", { value: n })));
 }
 
+/**
+ * Re-render without throwing the reader back to the top.
+ *
+ * Every edit rebuilds the view's DOM, which resets the page scroll and every
+ * scrolling panel inside it. Categorizing is a hundred small edits in a row, so
+ * losing your place on each one makes the job unusable — scrolling back down
+ * costs more than the edit itself.
+ *
+ * Scroll boxes are matched by their position within the active view, which is
+ * stable because the rebuild produces the same structure. Focus is restored by
+ * an explicit key: the row just categorized leaves the list, so the key that
+ * was focused now belongs to the next one along, and typing carries straight
+ * on down the list.
+ */
+let refocusKey = null;   // set by an editor just before it commits and loses focus
+
+function preserveUI(rebuild) {
+  const main = $("main");
+  const pageTop = main ? main.scrollTop : 0;
+  const boxes = $$(".view.active .scroll").map((node) => node.scrollTop);
+
+  // Pressing Enter blurs the field to commit it, so by now activeElement is the
+  // body. The editor records where it was on its way out.
+  const active = document.activeElement;
+  const key = refocusKey || (active && active.dataset ? active.dataset.focusKey : null);
+  refocusKey = null;
+
+  rebuild();
+
+  // Reading scrollHeight forces the browser to lay the new content out. Without
+  // that flush, assigning scrollTop can be clamped against a height that has not
+  // been computed yet, and the position silently lands near the top.
+  const restore = () => {
+    if (main) { void main.scrollHeight; main.scrollTop = pageTop; }
+    $$(".view.active .scroll").forEach((node, i) => {
+      if (boxes[i] === undefined) return;
+      void node.scrollHeight;
+      node.scrollTop = boxes[i];
+    });
+  };
+
+  restore();
+
+  if (key) {
+    const next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    if (next) {
+      // preventScroll keeps focus from revealing the field. Never call select()
+      // here: it has no such option and reveals the selection unconditionally,
+      // a frame or two later, which is exactly the jump this function exists to
+      // stop. Put the caret at the end instead.
+      next.focus({ preventScroll: true });
+      if (next.setSelectionRange && next.type !== "date") {
+        const end = next.value.length;
+        try { next.setSelectionRange(end, end); } catch (err) { /* unsupported type */ }
+      }
+    }
+  }
+
+  // Hold the position across the next few frames: layout settles late, and a
+  // browser-initiated reveal can land after the first frame.
+  restore();
+  requestAnimationFrame(restore);
+  requestAnimationFrame(() => requestAnimationFrame(restore));
+  setTimeout(restore, 60);
+}
+
 /** After a save, put the view back where it was rather than scrolling to top. */
 function afterEdit() {
   scheduleSave();
-  render();
+  preserveUI(render);
 }
 
 function renderCategorize() {
@@ -3375,7 +3454,7 @@ function renderCategorize() {
     ]));
 
     const shown = groups.slice(0, state.backlogLimit);
-    const rows = shown.map((group) => {
+    const rows = shown.map((group, position) => {
       // Held outside the input so a broadened rule survives until it is used.
       const draft = { match: group.match };
 
@@ -3400,7 +3479,7 @@ function renderCategorize() {
           title: "Shorten this to catch more spellings of the same merchant.",
           onchange: (ev) => { draft.match = ev.target.value.trim() || group.match; },
         })),
-        el("td", {}, categoryInput("", assign)),
+        el("td", {}, categoryInput("", assign, undefined, "backlog-" + position)),
       ]);
     });
 
@@ -4155,7 +4234,7 @@ async function saveNow() {
     toast("Saved.");
   } else {
     await cacheData();
-    render();
+    renderChrome();
     toast("Cached in this browser. Connect the folder or use Export to write it to disk.");
   }
 }

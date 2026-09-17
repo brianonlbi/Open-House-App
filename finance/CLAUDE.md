@@ -544,6 +544,38 @@ the selection — which is looser than grouping by merchant key on purpose:
 Editing is a burst of small changes, so writes go through `scheduleSave()`,
 which coalesces them after ~1.2s. Every write also rewrites the backup, and one
 good backup beats a hundred near-identical ones.
+
+**Every edit path must re-render through `preserveUI()`, never bare `render()`.**
+A rebuild resets the page scroll and every scrolling panel in it. Categorizing
+is a hundred small edits in a row, and scrolling back down after each one costs
+more than the edit — the first real user hit this immediately and said it made
+the job impossible.
+
+`preserveUI` restores the page scroll, each scroll box (matched by position
+within the active view, which is stable because the rebuild produces the same
+structure), and focus (by an explicit `data-focus-key`). Two details matter:
+
+- **Capture the focus key on the way out, not during the rebuild.** Enter blurs
+  the field to commit it, so by the time the re-render runs `activeElement` is
+  the body. Editors set `refocusKey` in their change handler.
+- **Never call `select()` when restoring focus.** It has no `preventScroll`
+  option and reveals its element unconditionally, a frame or two later — the
+  exact jump this function exists to prevent. Use `setSelectionRange` instead.
+
+In the backlog the row just categorized leaves the list, so the key that had
+focus now belongs to the next merchant: typing carries straight down the list
+with no mouse at all.
+
+`saveNow()` calls `renderChrome()` rather than `render()`. A save changes the
+header, the status bar and the data-file panel; rebuilding every view for it
+threw the scroll away a second after each edit.
+
+**Testing scroll behaviour needs care.** Playwright scrolls an element into
+view before acting on it, so measuring before that happens tests the harness
+rather than the app — an early version of this test "passed" at scroll position
+zero, and separately "failed" against a position Playwright itself had set.
+Focus the field first, then measure, then type with the keyboard only. The test
+is checked both ways: it fails against the pre-fix file and passes after.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
