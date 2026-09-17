@@ -115,6 +115,12 @@ async function run(API) {
     deepEq("repairs a non-object overrides field", corrupt.overrides, {});
 
     const existing = API.migrate({ created: "2020-01-01T00:00:00.000Z", transactions: [] });
+    eq("an account with no kind gets one, so screens that show it do not break",
+       API.migrate({ accounts: [{ id: "chk", label: "Checking" }] }).accounts[0].kind, "unknown");
+    eq("a kind that is there is left alone",
+       API.migrate({ accounts: [{ id: "chk", label: "Checking", kind: "checking" }] }).accounts[0].kind,
+       "checking");
+
     eq("does not overwrite the original created date", existing.created, "2020-01-01T00:00:00.000Z");
   }
 
@@ -1274,6 +1280,163 @@ async function run(API) {
     // Overriding a single transaction to a new name creates it too.
     API.setOverride(data, data.transactions[0], "Snacks");
     ok("typing onto one transaction creates the name", data.categories.includes("Snacks"));
+  }
+
+  describe("removing an account");
+  {
+    const make = () => {
+      const d = API.migrate({
+        accounts: [{ id: "keep", label: "Keep", kind: "credit_card" },
+                   { id: "bad", label: "Bad Import", kind: "credit_card" }],
+        transactions: [
+          { id: "k1", date: "2026-01-01", amount: -10, type: "expense", account: "keep", description: "SAMPLE A" },
+          { id: "k2", date: "2026-01-02", amount: -20, type: "expense", account: "keep", description: "SAMPLE A" },
+          { id: "b1", date: "2026-01-03", amount: 99,  type: "expense", account: "bad",  description: "SAMPLE B" },
+          { id: "b2", date: "2026-01-04", amount: 77,  type: "expense", account: "bad",  description: "SAMPLE B" },
+        ],
+      });
+      API.addRule(d, "SAMPLE A", "Good");
+      API.setOverride(d, d.transactions.find((t) => t.id === "b1"), "Pinned");
+      API.recategorizeAll(d);
+      return d;
+    };
+
+    const data = make();
+    eq("an override exists on the bad account", Object.keys(data.overrides).length, 1);
+
+    const gone = API.removeAccount(data, "bad");
+    eq("it reports how many went", gone.removed, 2);
+    eq("only the other account's rows remain", data.transactions.length, 2);
+    ok("and they are the right ones", data.transactions.every((t) => t.account === "keep"));
+    eq("the account itself is gone", data.accounts.length, 1);
+    eq("the remaining account is untouched", data.accounts[0].id, "keep");
+
+    eq("overrides pointing at removed rows are cleaned up", Object.keys(data.overrides).length, 0);
+    eq("rules are left alone — they are not account-specific", data.rules.length, 1);
+    eq("and still apply to what is left", data.transactions[0].category, "Good");
+
+    eq("totals reflect the removal", API.totalsFor(data.transactions).spend, -30);
+
+    // Removing something that is not there must not damage anything.
+    const before = data.transactions.length;
+    eq("removing an unknown account removes nothing", API.removeAccount(data, "nope").removed, 0);
+    eq("and leaves the data alone", data.transactions.length, before);
+  }
+
+  describe("undoing one import exactly");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "card", label: "Card", kind: "credit_card" }],
+      transactions: [
+        { id: "old1", date: "2026-01-01", amount: -10, type: "expense", account: "card", description: "SAMPLE OLD" },
+        { id: "new1", date: "2026-02-01", amount: -20, type: "expense", account: "card", description: "SAMPLE NEW" },
+        { id: "new2", date: "2026-02-02", amount: -30, type: "expense", account: "card", description: "SAMPLE NEW" },
+      ],
+    });
+    API.recategorizeAll(data);
+
+    const gone = API.undoImport(data, { ids: ["new1", "new2"] });
+    eq("exactly the rows that import added", gone.removed, 2);
+    eq("the earlier import is untouched", data.transactions.length, 1);
+    eq("and it is the right row", data.transactions[0].id, "old1");
+    eq("the account survives because it still has rows", data.accounts.length, 1);
+
+    eq("undoing nothing is safe", API.undoImport(data, null).removed, 0);
+    eq("and so is an empty record", API.undoImport(data, { ids: [] }).removed, 0);
+  }
+
+  describe("undoing an import that was the whole account");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "only", label: "Only", kind: "credit_card" }],
+      transactions: [
+        { id: "a", date: "2026-01-01", amount: -10, type: "expense", account: "only", description: "SAMPLE" },
+        { id: "b", date: "2026-01-02", amount: -20, type: "expense", account: "only", description: "SAMPLE" },
+      ],
+    });
+    API.undoImport(data, { ids: ["a", "b"] });
+    eq("no transactions left", data.transactions.length, 0);
+    eq("and the now-empty account is cleared away too", data.accounts.length, 0);
+  }
+
+  describe("removing an account forgets how its files were read");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "store-card", label: "Store Card", kind: "credit_card" },
+                 { id: "keep", label: "Keep", kind: "credit_card" }],
+      transactions: [
+        { id: "s1", date: "2026-01-01", amount: -10, type: "expense", account: "store-card", description: "SAMPLE" },
+        { id: "k1", date: "2026-01-01", amount: -20, type: "expense", account: "keep", description: "SAMPLE" },
+      ],
+      column_maps: {
+        sig_store: { accountLabel: "Store Card", columns: ["Date", "Amount"], moneyOut: "negative" },
+        sig_keep:  { accountLabel: "Keep", columns: ["Date", "Amount"], moneyOut: "negative" },
+      },
+    });
+
+    const gone = API.removeAccount(data, "store-card");
+    eq("the transactions go", gone.removed, 1);
+    eq("and so does the mapping that fed them", gone.forgotten, 1);
+    ok("the bad mapping is really gone", !data.column_maps.sig_store);
+    ok("the other account's mapping is untouched", !!data.column_maps.sig_keep);
+
+    // A mapping is matched by the account it names, however the name is spelled.
+    eq("labels become ids the same way everywhere",
+       API.accountIdFromLabel("Sample Card \u2014 Two"), "sample-card-two");
+    eq("forgetting a mapping that is not there is harmless",
+       API.forgetMappingsFor(data, "nothing-here"), 0);
+  }
+
+  describe("undoing an import that emptied an account forgets its mapping too");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "only", label: "Only", kind: "credit_card" }],
+      transactions: [
+        { id: "a", date: "2026-01-01", amount: -10, type: "expense", account: "only", description: "SAMPLE" },
+      ],
+      column_maps: { sig: { accountLabel: "Only", columns: ["Date", "Amount"] } },
+    });
+    const gone = API.undoImport(data, { ids: ["a"] });
+    eq("the row goes", gone.removed, 1);
+    eq("the mapping goes with the emptied account", gone.forgotten, 1);
+    eq("nothing is left to read the file wrongly again", Object.keys(data.column_maps).length, 0);
+  }
+
+  describe("an import that leaves rows behind keeps the mapping");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "card", label: "Card", kind: "credit_card" }],
+      transactions: [
+        { id: "old", date: "2026-01-01", amount: -10, type: "expense", account: "card", description: "SAMPLE" },
+        { id: "new", date: "2026-02-01", amount: -20, type: "expense", account: "card", description: "SAMPLE" },
+      ],
+      column_maps: { sig: { accountLabel: "Card", columns: ["Date", "Amount"] } },
+    });
+    const gone = API.undoImport(data, { ids: ["new"] });
+    eq("only that import's rows go", gone.removed, 1);
+    eq("the mapping stays — the account is still in use", gone.forgotten, 0);
+    ok("and it is still there", !!data.column_maps.sig);
+  }
+
+  describe("accountSummaries");
+  {
+    const data = API.migrate({
+      accounts: [{ id: "a", label: "A", kind: "credit_card" },
+                 { id: "b", label: "B", kind: "checking" }],
+      transactions: [
+        { id: "1", date: "2026-03-01", amount: -10, type: "expense", account: "a", source_file: "a.csv" },
+        { id: "2", date: "2026-01-01", amount: -20, type: "expense", account: "a", source_file: "a.csv" },
+        { id: "3", date: "2026-02-01", amount: 500, type: "income",  account: "b", source_file: "b.csv" },
+      ],
+    });
+    const s = API.accountSummaries(data);
+    eq("one entry per account", s.length, 2);
+    eq("counts rows", s[0].count, 2);
+    eq("earliest date", s[0].first, "2026-01-01");
+    eq("latest date", s[0].last, "2026-03-01");
+    eq("spending for that account", s[0].totals.spend, -30);
+    eq("income lands as income, not spending", s[1].totals.income, 500);
+    deepEq("and it knows which file it came from", s[1].files, ["b.csv"]);
   }
 
   /* ------------------------------------------------------------ report */

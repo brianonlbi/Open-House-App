@@ -579,7 +579,7 @@ kbd {
  * 1. Constants and state
  * ======================================================================== */
 
-const APP_VERSION    = "0.7.2";       // bump when the app changes meaningfully
+const APP_VERSION    = "0.8.0";       // bump when the app changes meaningfully
 const SCHEMA_VERSION = 1;             // bump when the data file shape changes
 
 const DATA_FILE   = "finances-data.json";
@@ -609,6 +609,7 @@ const state = {
   backlogLimit: 40,    // uncategorized merchants shown before "show more"
   overview: { month: "", account: "" },
   recurring: { show: "active" },
+  confirmRemove: null, // account id armed for removal, awaiting a second click
   selected: new Set(), // transaction ids ticked for a bulk change
   suggestRule: null,   // { match, category, count } offered after a manual recategorize
 };
@@ -912,6 +913,9 @@ function migrate(data) {
   for (const key of ["overrides", "column_maps"]) {
     if (!out[key] || typeof out[key] !== "object") out[key] = {};
   }
+  // An account written by hand, or by an older version, may not say what kind
+  // it is. Screens that show the kind must not be the thing that breaks.
+  out.accounts = out.accounts.map((a) => Object.assign({ kind: "unknown" }, a));
   return out;
 }
 
@@ -1550,9 +1554,15 @@ function detectParser(text, data) {
   return { id: null, parser: null, header, signature };
 }
 
+/** The slug an account label turns into. One definition, because a mapping is
+ *  matched back to its account by running its saved name through this. */
+function accountIdFromLabel(label) {
+  return String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 /** Turn a label into a stable, unique account id. */
 function accountIdFrom(label, taken) {
-  const base = String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "account";
+  const base = accountIdFromLabel(label) || "account";
   let id = base, n = 2;
   while (taken.includes(id)) id = `${base}-${n++}`;
   return id;
@@ -1574,7 +1584,7 @@ function inferAccount(filename, parser) {
                 filename.replace(/\.[a-z]+$/i, "").replace(/[_-]+/g, " ").slice(0, 40) ||
                 "Account";
   return {
-    id: label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    id: accountIdFromLabel(label),
     label,
     institution,
     kind: parser ? parser.kind : "unknown",
@@ -1679,6 +1689,7 @@ async function commitImport() {
     duplicates: imp.duplicates,
     problems: imp.problems.length,
     at: new Date().toISOString(),
+    ids: imp.fresh.map((t) => t.id),   // so this import can be taken back exactly
   };
   state.pendingImport = null;
   state.dirty = true;
@@ -2908,6 +2919,88 @@ function renderTransactions() {
   }
 }
 
+/* ------------------------------------------------------------- removing */
+
+/**
+ * Take an account and everything that came in on it back out.
+ *
+ * A bad import has to be undoable. Getting a mapping wrong — the sign, a
+ * column, the account — is easy to do and the result is a ledger full of
+ * numbers pointing the wrong way, which is worse than no numbers at all.
+ *
+ * Overrides for the removed rows go too, or they sit in the data file forever
+ * pointing at transactions that no longer exist. Rules are left alone: they are
+ * not account-specific and are still wanted.
+ */
+function removeAccount(data, accountId) {
+  const going = data.transactions.filter((tx) => tx.account === accountId);
+  data.transactions = data.transactions.filter((tx) => tx.account !== accountId);
+  for (const tx of going) delete data.overrides[tx.id];
+  data.accounts = data.accounts.filter((a) => a.id !== accountId);
+  const forgotten = forgetMappingsFor(data, accountId);
+  recategorizeAll(data);
+  return { removed: going.length, forgotten };
+}
+
+/**
+ * Drop the saved column mapping that fed an account.
+ *
+ * This is the half that is easy to miss. If the mapping is wrong — a column
+ * misread, a row type filed as the wrong thing — then removing the account
+ * alone fixes nothing: the same file dropped in again is read by the same bad
+ * mapping, silently, with no chance to correct it. Forgetting the mapping puts
+ * the question back.
+ */
+function forgetMappingsFor(data, accountId) {
+  const maps = data.column_maps || {};
+  let forgotten = 0;
+  if (!accountId) return 0;
+  for (const [signature, spec] of Object.entries(maps)) {
+    if (accountIdFromLabel(spec.accountLabel || spec.label || "") !== accountId) continue;
+    delete maps[signature];
+    forgotten += 1;
+  }
+  return forgotten;
+}
+
+/** Take back exactly the rows one import added, by the ids it recorded. */
+function undoImport(data, record) {
+  if (!record || !record.ids || !record.ids.length) return { removed: 0, forgotten: 0 };
+  const ids = new Set(record.ids);
+  const before = data.transactions.length;
+
+  data.transactions = data.transactions.filter((tx) => !ids.has(tx.id));
+  for (const id of ids) delete data.overrides[id];
+
+  // An account with nothing left in it is just clutter, and its mapping goes
+  // with it for the same reason a removed account's does.
+  const emptied = data.accounts.filter(
+    (a) => !data.transactions.some((tx) => tx.account === a.id));
+  data.accounts = data.accounts.filter(
+    (a) => data.transactions.some((tx) => tx.account === a.id));
+  let forgotten = 0;
+  for (const account of emptied) forgotten += forgetMappingsFor(data, account.id);
+
+  recategorizeAll(data);
+  return { removed: before - data.transactions.length, forgotten };
+}
+
+/** Per-account counts and date ranges, for the accounts panel. */
+function accountSummaries(data) {
+  return (data.accounts || []).map((account) => {
+    const rows = data.transactions.filter((tx) => tx.account === account.id);
+    const dates = rows.map((tx) => tx.date).sort();
+    return {
+      account,
+      count: rows.length,
+      first: dates[0] || null,
+      last: dates[dates.length - 1] || null,
+      totals: totalsFor(rows),
+      files: [...new Set(rows.map((tx) => tx.source_file))],
+    };
+  });
+}
+
 /* ----------------------------------------------------------- recurring */
 
 const DAY_MS = 86400000;
@@ -4068,8 +4161,89 @@ function renderImportPreview() {
   return panel;
 }
 
+/**
+ * Accounts, with a way to take one back out.
+ *
+ * Two clicks, never one: the first arms it and says exactly what will go, the
+ * second does it. A destructive action should never be one stray click away,
+ * and it should say the number out loud before it happens.
+ */
+function renderAccountsPanel() {
+  const data = state.data;
+  const summaries = accountSummaries(data);
+  if (!summaries.length) return null;
+
+  const panel = el("div", { class: "panel" }, [
+    el("h3", { text: `Accounts (${summaries.length})` }),
+    el("p", { class: "small muted",
+      text: "Removing an account takes its transactions with it, and forgets how its files " +
+            "were read — so if the mapping was the mistake, the next import asks again. " +
+            "The previous version of the data file is kept as " + BACKUP_FILE + ", so a " +
+            "removal is recoverable." }),
+  ]);
+
+  const rows = summaries.map((s) => {
+    const armed = state.confirmRemove === s.account.id;
+
+    const doRemove = () => {
+      const { removed, forgotten } = removeAccount(data, s.account.id);
+      state.confirmRemove = null;
+      if (state.lastImport && state.lastImport.account === s.account.id) state.lastImport = null;
+      state.dirty = true;
+      toast(`${s.account.label} removed — ${plural(removed, "transaction")} taken out.` +
+            (forgotten ? " Its column mapping was forgotten, so the next file from this " +
+                         "account asks how to read it again." : ""));
+      afterEdit();
+    };
+
+    return el("tr", { class: armed ? "picked" : "" }, [
+      el("td", { class: "small", text: s.account.label }),
+      el("td", { class: "small muted", text: String(s.account.kind || "unknown").replace("_", " ") }),
+      el("td", { class: "num", text: s.count.toLocaleString() }),
+      el("td", { class: "small muted", text: s.first ? `${s.first} → ${s.last}` : "—" }),
+      el("td", { class: "num " + (s.totals.spend < 0 ? "neg" : ""), text: fmtMoney(s.totals.spend) }),
+      el("td", {}, armed
+        ? el("span", { class: "row" }, [
+            el("button", { class: "btn danger", onclick: doRemove },
+              `Remove ${plural(s.count, "transaction")}`),
+            el("button", {
+              class: "btn link",
+              onclick: () => { state.confirmRemove = null; preserveUI(render); },
+            }, "keep it"),
+          ])
+        : el("button", {
+            class: "btn link",
+            onclick: () => { state.confirmRemove = s.account.id; preserveUI(render); },
+          }, "remove")),
+    ]);
+  });
+
+  panel.append(el("div", { class: "scroll", style: "margin-top:8px" },
+    el("table", { class: "tbl" }, [
+      el("thead", {}, el("tr", {}, [
+        el("th", { text: "Account" }), el("th", { text: "Kind" }),
+        el("th", { text: "Rows" }), el("th", { text: "Covering" }),
+        el("th", { text: "Spending", style: "text-align:right" }), el("th", { text: "" }),
+      ])),
+      el("tbody", {}, rows),
+    ])));
+
+  const armed = summaries.find((s) => s.account.id === state.confirmRemove);
+  if (armed) {
+    panel.append(el("div", { class: "note warn", style: "margin-top:10px" }, [
+      el("strong", { text: `This removes ${plural(armed.count, "transaction")} from ${armed.account.label}.` }),
+      "Rules and categories stay. You can import the file again afterwards, and " +
+      "the previous data file is still in " + BACKUP_FILE + " either way.",
+    ]));
+  }
+  return panel;
+}
+
 function renderLastImport() {
   const imp = state.lastImport;
+  const still = imp.ids ? imp.ids.filter(
+    (id) => state.data.transactions.some((tx) => tx.id === id)).length : 0;
+
   return el("div", { class: "panel" }, [
     el("h3", { text: "Last import" }),
     el("dl", { class: "facts" }, [
@@ -4080,6 +4254,22 @@ function renderLastImport() {
       el("dt", { text: "Unreadable" }),  el("dd", { text: String(imp.problems) }),
       el("dt", { text: "When" }),        el("dd", { text: fmtDateTime(imp.at) }),
     ]),
+    still ? el("div", { class: "row", style: "margin-top:10px" }, [
+      el("button", {
+        class: "btn danger",
+        onclick: () => {
+          const { removed, forgotten } = undoImport(state.data, imp);
+          state.lastImport = null;
+          state.dirty = true;
+          toast(`Undone \u2014 ${plural(removed, "transaction")} taken back out.` +
+                (forgotten ? " The column mapping went with it, so the file can be " +
+                             "mapped again from scratch." : ""));
+          afterEdit();
+        },
+      }, `Undo this import (${plural(still, "row")})`),
+      el("span", { class: "small muted",
+        text: "Takes back exactly the rows this file added. Nothing else is touched." }),
+    ]) : null,
   ]);
 }
 
@@ -4174,6 +4364,8 @@ function renderDataView() {
 
   body.append(cols);
 
+  const accounts = renderAccountsPanel();
+  if (accounts) body.append(accounts);
   if (state.lastImport) body.append(renderLastImport());
   const saved = renderSavedMappings();
   if (saved) body.append(saved);
@@ -4432,6 +4624,12 @@ window.__finance = {
   addMonthsKeepingDay,
   median,
   CADENCES,
+  // removing
+  removeAccount,
+  undoImport,
+  accountSummaries,
+  forgetMappingsFor,
+  accountIdFromLabel,
   // build step 6
   monthOf,
   monthLabel,

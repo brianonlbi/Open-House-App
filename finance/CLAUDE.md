@@ -579,6 +579,50 @@ is checked both ways: it fails against the pre-fix file and passes after.
 - Dark mode via `prefers-color-scheme`, overridable by the theme button, stored
   in IndexedDB.
 
+### Removing a bad import
+
+A finance app that can only add is not trustworthy. Getting an import wrong is
+easy — the wrong account, a column mapped to the wrong thing, a row type filed
+as the wrong role — and the result is a ledger full of numbers pointing the
+wrong way, which is worse than no numbers at all. The first real user messed up
+an import within a day, and there was no way out. Two ways out exist now:
+
+- **Undo this import** on the Last import panel takes back *exactly* the rows
+  that one file added, by the ids recorded at commit time (`state.lastImport.ids`).
+- **The Accounts panel** on the Data file tab removes a whole account and
+  everything that came in on it.
+
+Both are **two clicks, never one**: the first arms the action and says out loud
+how many transactions will go, the second does it, and there is a "keep it"
+escape. A destructive action must never be one stray click away, and it must
+state the number before it happens. The backup file is written before every
+save, so a removal is also recoverable from disk.
+
+**Removal takes the saved column mapping with it.** This is the half that is
+easy to miss. If the mapping was the mistake, removing the account alone fixes
+nothing: the same file dropped in again is read by the same bad mapping,
+silently, with no chance to correct it. `forgetMappingsFor()` drops any mapping
+whose `accountLabel` slugs to the removed account's id, so the next file asks
+the mapping question again. `undoImport()` does the same for an account its undo
+emptied, and leaves the mapping alone when the account still has rows.
+
+Overrides for removed rows go too, or they sit in the data file forever
+pointing at transactions that no longer exist. **Rules stay**: they are not
+account-specific and are still wanted.
+
+**The sign radio cannot botch an import, and a test that assumes it can is
+wrong.** The parser verifies the sign convention against the parsed rows — if
+most non-transfer, non-fee rows come out positive it inverts everything and says
+so in the review panel. So "pick the wrong sign on purpose" produces a *correct*
+import. A botched-import test has to break something the app cannot second-guess:
+declaring a row type the wrong role is the realistic one (every purchase filed
+as a payment, and the card's spending vanishes into transfers).
+
+**`migrate()` fills in an account's `kind`.** A hand-written or older data file
+may not have one, and the Accounts panel shows it — a missing field there threw
+during render and took the whole page down with it. Anything a screen reads off
+an account must be repaired on load, not assumed.
+
 ## Build order
 
 Working vertical slices, stopping after each so the user can try it.
