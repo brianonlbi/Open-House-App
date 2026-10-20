@@ -1,0 +1,1202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Privacy: the page may not make network requests of any kind. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; form-action 'none'; manifest-src 'self'; worker-src 'self'">
+<title>Preschool Social History</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Social History">
+<meta name="theme-color" content="#1f6f8b">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.png">
+<style>
+  :root{
+    --bg:#eef1f5; --card:#ffffff; --text:#1b2430; --muted:#5a6676; --line:#d6dce4;
+    --field:#ffffff; --field-line:#b9c3cf;
+    --accent:#1f6f8b; --accent-ink:#ffffff; --accent-soft:#e2eff4;
+    --warn:#b42318; --ok:#25734a;
+    --top:120px;
+    color-scheme:light dark;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f141a; --card:#19212a; --text:#e5eaf0; --muted:#9aa7b4; --line:#2c3743;
+      --field:#121920; --field-line:#3a4756;
+      --accent:#62b6d4; --accent-ink:#06202a; --accent-soft:#1b3340;
+      --warn:#ff8f80; --ok:#72d39f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%; scroll-padding-top:var(--top)}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:17px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-tap-highlight-color:transparent;
+  }
+  button,input,textarea{font:inherit; color:inherit}
+  button{cursor:pointer}
+  :focus-visible{outline:3px solid var(--accent); outline-offset:2px}
+
+  /* ---------- sticky top: header + section nav ---------- */
+  .top{position:sticky; top:0; z-index:20; background:var(--bg); border-bottom:1px solid var(--line)}
+  .bar{display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; max-width:1100px; margin:0 auto; padding:8px 16px 6px}
+  .ttl{flex:1 1 200px; min-width:0}
+  .ttl h1{margin:0; font-size:18px; line-height:1.25}
+  .ttl h1 .stu{font-weight:600; color:var(--accent)}
+  .sub{font-size:13px; color:var(--muted); display:flex; flex-wrap:wrap; gap:2px 10px}
+  .saved{font-weight:600}
+  .saved:empty{display:none}
+  .saved.ok{color:var(--ok)} .saved.bad{color:var(--warn)}
+  .actions{display:flex; flex-wrap:wrap; gap:6px; margin-left:auto}
+  .btn{
+    min-height:44px; padding:0 12px; border-radius:10px; border:1px solid var(--line);
+    background:var(--card); font-size:16px; font-weight:600; white-space:nowrap;
+  }
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
+  .btn.danger{color:var(--warn)}
+  .secnav{display:flex; gap:6px; overflow-x:auto; max-width:1100px; margin:0 auto; padding:2px 16px 8px; scrollbar-width:none; -webkit-overflow-scrolling:touch}
+  .secnav::-webkit-scrollbar{display:none}
+  .nchip{
+    flex:0 0 auto; display:flex; align-items:center; gap:6px; min-height:40px; padding:0 12px;
+    border-radius:999px; border:1px solid var(--line); background:var(--card);
+    color:var(--text); text-decoration:none; font-size:15px; font-weight:600;
+  }
+  .nchip small{font-weight:500; color:var(--muted); font-size:12px}
+  .nchip.on{background:var(--accent); border-color:var(--accent); color:var(--accent-ink)}
+  .nchip.on small{color:var(--accent-ink); opacity:.85}
+
+  /* ---------- form ---------- */
+  main{max-width:1100px; margin:0 auto; padding:16px 16px 40vh}
+  .sec{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:6px 20px 12px; margin:0 0 18px; scroll-margin-top:calc(var(--top) + 8px)}
+  .sechead{display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:4px 12px; padding:12px 0 8px; border-bottom:2px solid var(--accent-soft)}
+  .sechead h2{margin:0; font-size:21px}
+  .prog{font-size:14px; color:var(--muted); font-weight:600}
+  .prog.done{color:var(--ok)}
+  .subhead{margin:18px 0 0; padding:6px 0; font-size:15px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent)}
+
+  .q{padding:14px 0; border-top:1px solid var(--line)}
+  .subhead + .q, .sechead + .q, .sechead + .items > .q:first-child{border-top:0}
+  .qrow{display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px}
+  .qlabel{flex:1 1 300px; font-weight:700; margin:0}
+  .q.long > .qlabel, .q.stack > .qlabel, .q.tableq > .qlabel{display:block; margin-bottom:8px}
+  .ctrls{display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px}
+  .qrow > .fld{flex:1 1 260px}
+  .inl{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .inl > span{font-weight:600; color:var(--muted); font-size:16px}
+  .inl > .fld{width:200px}
+
+  .items.grid{display:grid; grid-template-columns:1fr 1fr; column-gap:24px}
+  .items.grid > .q{border-top:0; padding:10px 0}
+  .items.grid > .tableq{grid-column:1 / -1; border-top:1px solid var(--line); padding-top:16px}
+
+  .fld{position:relative; min-width:0}
+  .inp, .ta, .grow > .pv{
+    width:100%; font-size:17px; line-height:1.4; padding:10px 12px;
+    border:1px solid var(--field-line); border-radius:10px; background:var(--field); color:var(--text);
+  }
+  .inp{min-height:46px; -webkit-appearance:none; appearance:none; display:block}
+  .inp[type=date]{min-height:46px}
+  .inp[type=date]::-webkit-date-and-time-value{text-align:left}
+  .inp:focus, .ta:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+  .fld > .pv{display:none}
+
+  /* Auto-growing textarea: the hidden .pv mirror sets the height (no JS measuring,
+     no scroll jump). The same mirror is what prints. */
+  .grow{display:grid}
+  .grow > .ta, .grow > .pv{grid-area:1 / 1 / 2 / 2; margin:0; white-space:pre-wrap; overflow-wrap:anywhere}
+  .grow > .ta{resize:none; overflow:hidden; display:block}
+  .grow > .pv{visibility:hidden; pointer-events:none}
+
+  .fu{margin:10px 0 0 6px; padding:2px 0 2px 16px; border-left:3px solid var(--accent-soft); transition:opacity .15s}
+  .fu + .fu{margin-top:12px}
+  .fu > .flabel{display:block; font-size:16px; font-weight:600; color:var(--muted); margin-bottom:6px}
+  .fu.row{display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px}
+  .fu.row > .flabel{margin:0}
+  .fu.row > .fld{flex:1 1 240px}
+  .fu.dim{opacity:.6}
+  .fu.dim:focus-within{opacity:1}
+
+  /* yes / no pills and option chips */
+  .yn{display:inline-flex; gap:8px}
+  .pill, .opt{
+    min-height:44px; border-radius:999px; border:1.5px solid var(--field-line); background:var(--field);
+    font-size:16px; font-weight:600; touch-action:manipulation; user-select:none; -webkit-user-select:none;
+  }
+  .pill{min-width:72px; padding:0 16px}
+  .opts{display:flex; flex-wrap:wrap; gap:8px}
+  .opt{padding:0 16px; text-align:left; line-height:1.2}
+  .opt::before{content:""; display:inline-block; width:16px; height:16px; margin:0 8px -2px 0; border:2px solid var(--field-line); border-radius:4px}
+  .opts.single .opt::before{border-radius:50%}
+  .pill[aria-pressed=true], .opt[aria-pressed=true]{background:var(--accent); border-color:var(--accent); color:var(--accent-ink)}
+  .opt[aria-pressed=true]::before{border-color:var(--accent-ink); background:var(--accent-ink); box-shadow:inset 0 0 0 2px var(--accent)}
+
+  .minis{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px 14px}
+  .mini > span{display:block; font-weight:700; font-size:15px; color:var(--muted); margin-bottom:4px}
+
+  /* tables */
+  .tbl{display:grid; gap:8px}
+  .tr{display:grid; grid-template-columns:var(--gtc) 44px; gap:8px; align-items:center}
+  .th .td{font-size:14px; font-weight:700; color:var(--muted)}
+  .td{min-width:0; margin:0}
+  .td .cl{display:none}
+  .rm{width:44px; height:44px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--warn); font-size:20px; font-weight:700}
+  .addrow{margin-top:10px}
+
+  @media screen and (max-width:640px){
+    .items.grid{grid-template-columns:1fr}
+    .minis{grid-template-columns:1fr 1fr}
+    .th{display:none}
+    .tr{grid-template-columns:1fr; padding:12px; border:1px solid var(--line); border-radius:12px; position:relative}
+    .td .cl{display:block; font-size:14px; font-weight:700; color:var(--muted); margin-bottom:4px}
+    .tr .rm{justify-self:end}
+  }
+
+  /* interview manager */
+  .overlay{position:fixed; inset:0; z-index:50; background:rgba(10,15,20,.45); display:flex; align-items:flex-start; justify-content:center; padding:60px 16px 16px}
+  .overlay[hidden]{display:none}
+  .panel{background:var(--card); border-radius:16px; width:100%; max-width:640px; max-height:calc(100vh - 80px); display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.3)}
+  .panel header{display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line)}
+  .panel header h2{flex:1; margin:0; font-size:19px}
+  .ivlist{list-style:none; margin:0; padding:6px 16px 12px; overflow-y:auto; -webkit-overflow-scrolling:touch}
+  .ivlist li{display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; padding:12px 0; border-bottom:1px solid var(--line)}
+  .ivlist li:last-child{border-bottom:0}
+  .ivname{flex:1 1 220px; min-width:0}
+  .ivname b{display:block; overflow-wrap:anywhere}
+  .ivname small{color:var(--muted); font-size:13px}
+  .ivlist .cur{color:var(--ok); font-weight:700; font-size:13px}
+  .empty{color:var(--muted); padding:16px 0}
+
+  .toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(120px); background:var(--text); color:var(--bg); padding:12px 18px; border-radius:12px; font-weight:600; z-index:60; transition:transform .2s; max-width:calc(100% - 32px)}
+  .toast.show{transform:translateX(-50%) translateY(0)}
+
+  .print-only{display:none}
+
+  /* ---------- print / save as PDF ---------- */
+  @media print{
+    :root{--bg:#fff; --card:#fff; --text:#000; --muted:#222; --line:#999; --field:#fff; --field-line:#777; --accent:#000; --accent-soft:#bbb; --accent-ink:#000; color-scheme:light}
+    @page{margin:14mm 12mm}
+    html,body{background:#fff !important; color:#000 !important}
+    body{font-size:10.5pt; line-height:1.35}
+    .top, .overlay, .toast, .addrow, .rm, .noprint{display:none !important}
+    .print-only{display:block}
+    .phead{border-bottom:2px solid #000; padding-bottom:4pt; margin-bottom:8pt}
+    .phead h1{margin:0; font-size:16pt}
+    main{max-width:none; padding:0}
+    .sec{border:0; border-radius:0; padding:0; margin:0 0 10pt; background:#fff}
+    .sechead{border-bottom:1.5px solid #000; padding:4pt 0; break-after:avoid; page-break-after:avoid}
+    .sechead h2{font-size:13pt}
+    .subhead{color:#000; font-size:10pt; margin-top:8pt; break-after:avoid; page-break-after:avoid}
+    .q{padding:5pt 0; border-top:0.5px solid #ccc; break-inside:avoid; page-break-inside:avoid}
+    .qlabel{font-weight:700}
+    .inl > span{font-size:10pt; color:#222}
+    .prog{display:none}
+    .fu{border-left:1.5px solid #999; opacity:1 !important; margin-top:4pt}
+    .fu > .flabel{color:#222; font-size:10pt; margin-bottom:2pt}
+
+    .inp, .ta{display:none !important}
+    .fld > .pv, .grow > .pv{
+      display:block !important; visibility:visible !important; color:#000; background:#fff;
+      border:0; border-bottom:0.75px solid #777; border-radius:0; padding:1pt 2pt; min-height:1.4em;
+      font-size:10.5pt; white-space:pre-wrap; overflow-wrap:anywhere;
+    }
+    .grow > .pv{border:0.75px solid #999; min-height:calc(var(--lines, 2) * 1.35em + 4pt)}
+
+    .pill, .opt{
+      min-height:0; min-width:0; padding:0 8pt 0 0; border:0; border-radius:0; background:none !important;
+      color:#000 !important; font-size:10.5pt; font-weight:400;
+    }
+    .pill::before, .opt::before{content:"\2610\00a0" !important; display:inline !important; width:auto; height:auto; margin:0; border:0 !important; background:none !important; box-shadow:none !important; font-size:12pt}
+    .pill[aria-pressed=true], .opt[aria-pressed=true]{font-weight:700}
+    .pill[aria-pressed=true]::before, .opt[aria-pressed=true]::before{content:"\2612\00a0" !important}
+    .yn, .opts{gap:2pt}
+
+    .tbl{gap:0}
+    .tr{grid-template-columns:var(--gtc) !important; gap:0 6pt; break-inside:avoid; page-break-inside:avoid}
+    .tr .rmcell{display:none}
+    .th .td{color:#000; border-bottom:1px solid #000; font-size:9.5pt}
+    .items.grid > .q{padding:3pt 0}
+  }
+</style>
+</head>
+<body>
+
+<div class="top" id="top">
+  <header class="bar">
+    <div class="ttl">
+      <h1>Social History <span class="stu" id="hdrStudent"></span></h1>
+      <div class="sub">
+        <span class="saved" id="saved" aria-live="polite"></span>
+        <span>Answers are stored only on this device.</span>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn" id="btnList" aria-haspopup="dialog">Interviews ▾</button>
+      <button type="button" class="btn" id="btnNew">New</button>
+      <button type="button" class="btn" id="btnPrint">Print / PDF</button>
+      <button type="button" class="btn" id="btnExport">Export</button>
+      <button type="button" class="btn" id="btnImport">Import</button>
+      <input type="file" id="fileImport" accept=".json,application/json" hidden>
+    </div>
+  </header>
+  <nav class="secnav" id="secnav" aria-label="Sections"></nav>
+</div>
+
+<div class="print-only phead"><h1>Preschool Social History</h1></div>
+<main id="form"></main>
+
+<div class="overlay" id="sheet" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <header>
+      <h2 id="sheetTitle">Saved interviews</h2>
+      <button type="button" class="btn primary" id="sheetNew">+ New</button>
+      <button type="button" class="btn" id="sheetClose">Close</button>
+    </header>
+    <ul class="ivlist" id="ivlist"></ul>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* =====================================================================
+   QUESTIONNAIRE
+   Item types: h (sub-heading), short, long, yn, opts, table, group.
+   yn/opts may carry `inl` (parts on the same row) and `fu` (follow-ups
+   below). A follow-up's `when` ("yes" | "no") dims it until the parent
+   has that answer; follow-ups without `when` are never dimmed.
+   ===================================================================== */
+function H(label){ return {t:"h", label:label}; }
+function S(id, label, o){ return Object.assign({t:"short", id:id, label:label}, o); }
+function N(id, label, o){ return S(id, label, Object.assign({num:true}, o)); }
+function L(id, label, lines, o){ return Object.assign({t:"long", id:id, label:label, lines:lines}, o); }
+function YN(id, label, o){ return Object.assign({t:"yn", id:id, label:label}, o); }
+function O(id, label, options, o){ return Object.assign({t:"opts", id:id, label:label, options:options}, o); }
+function T(id, label, cols, rows, gtc){ return {t:"table", id:id, label:label, cols:cols, rows:rows, gtc:gtc}; }
+function G(id, label, parts){ return {t:"group", id:id, label:label, parts:parts}; }
+// Yes/no with one textarea follow-up: id_explain.
+function YNx(id, label, lines, fl, when){
+  return YN(id, label, {fu:[L(id + "_explain", fl || "If yes, explain:", lines, {when: when || "yes"})]});
+}
+function YNno(id, label, lines, fl){ return YNx(id, label, lines, fl || "If no, explain:", "no"); }
+function Until(id, label){ return YN(id, label, {inl:[S(id + "_until", "Until what age?")]}); }
+function ynInl(id, label){ return {t:"yn", id:id, label:label}; }
+
+var SECTIONS = [
+  {id:"info", nav:"Info", title:"Interview Information", grid:true, items:[
+    S("social_worker", "Social Worker"),
+    S("date", "Date", {type:"date"}),
+    S("student", "Student"),
+    S("school", "School"),
+    S("grade", "Grade"),
+    S("teacher", "Teacher"),
+    S("dob", "DOB", {type:"date"}),
+    S("address", "Address"),
+    S("phone", "Phone", {type:"tel"}),
+    S("informants", "Informant(s)"),
+    T("household", "Household", [
+      {label:"Name"}, {label:"Relationship"}, {label:"DOB", type:"date"}, {label:"Occupation/Status/School Grade"}
+    ], 7, "1.3fr 1fr 1fr 1.5fr")
+  ]},
+
+  {id:"family", nav:"1 Family", title:"1. Family History", items:[
+    H("Mother"),
+    S("mother_ethnicity", "What is the ethnicity of mother?"),
+    N("mother_arrival_year", "What year did mother arrive in U.S.?"),
+    S("mother_languages", "Language(s) spoken by mother"),
+    S("mother_education", "Mother's highest level of education"),
+    YNx("mother_ld_mh", "Does mother have history of learning difficulty and/or mental health concerns?", 3),
+    YNx("mother_health", "Does mother have any health concerns?", 3),
+    H("Father"),
+    S("father_ethnicity", "What is the ethnicity of father?"),
+    N("father_arrival_year", "What year did father arrive in U.S.?"),
+    S("father_languages", "Language(s) spoken by father"),
+    S("father_education", "Father's highest level of education"),
+    YNx("father_ld_mh", "Does father have history of learning difficulty and/or mental health concerns?", 3),
+    YNx("father_health", "Does father have any health concerns?", 3),
+    H("Family"),
+    YN("parents_married", "Are parents married?", {inl:[S("parents_married_how_long", "How long?")]}),
+    YNno("parents_live_together", "Do parents live together?", 3, "If no, explain custody:"),
+    S("family_eht_how_long", "How long has family lived in EHT?"),
+    YNx("home_changes", "Have there been any significant changes in the home recently?", 3),
+    YNx("family_dev_history", "Is there any family history of developmental delays, learning difficulties, special education needs, Autism, ADHD, or cognitive disabilities?", 3),
+    YNx("family_mental_illness", "Is there any family history of mental illness?", 3),
+    YN("dcpp", "Has DCP&P been involved with the family?", {fu:[
+      L("dcpp_explain", "If yes, explain:", 3, {when:"yes"}),
+      S("dcpp_caseworker", "Caseworker:", {when:"yes"})
+    ]}),
+    YN("ssi", "Does your child receive SSI?"),
+    L("family_enjoy", "What does your family enjoy doing together?", 3),
+    L("primary_concerns", "Primary concerns", 5)
+  ]},
+
+  {id:"birth", nav:"2 Birth", title:"2. Birth History", items:[
+    YNno("prenatal_care", "Did mother receive prenatal care?", 2),
+    YNx("preg_alcohol", "Did mother consume alcohol during pregnancy?", 2),
+    YNx("preg_drugs", "Did mother use illicit drugs during pregnancy?", 2),
+    YNx("preg_smoking", "Did mother smoke during pregnancy?", 2),
+    YNx("preg_medications", "Did mother take prescription/OTC medications while pregnant?", 2),
+    YNx("preg_complications", "Did mother have any complications during pregnancy?", 3),
+    S("birth_hospital", "What hospital was child born?"),
+    N("gestation_weeks", "How many weeks gestation was the baby at birth?"),
+    S("birth_weight", "How much did the baby weigh?"),
+    YN("labor_spontaneous", "Did mother spontaneously go into labor?"),
+    YN("labor_induced", "Was labor induced?"),
+    YNx("csection_scheduled", "Was there a scheduled c-section?", 2, "If so, why?"),
+    O("delivery_method", "How was the baby delivered?", ["Vaginal", "Emergency c-section"], {single:true}),
+    YNx("delivery_complications", "Were there any complications during delivery?", 3),
+    YN("special_care_after_birth", "Did the baby require any special care after birth?"),
+    YNx("nicu", "Was the baby cared for in the NICU?", 3),
+    N("hospital_days", "How many days did the baby remain in the hospital?")
+  ]},
+
+  {id:"infancy", nav:"3 Infancy", title:"3. Infancy", items:[
+    Until("breastfed", "Was your child breastfed?"),
+    Until("bottle_fed", "Was your child bottle-fed?"),
+    YNx("feeding_difficulties", "Did your child have any feeding difficulties as an infant?", 2),
+    Until("pacifier", "Did/does your child use a pacifier?"),
+    YN("colic", "Did your child have colic as an infant?"),
+    O("infant_description", "How would you describe your child as an infant?", ["Easy", "Fussy", "Very Alert", "Poor Sleeper", "Good Sleeper"])
+  ]},
+
+  {id:"medical", nav:"4 Medical", title:"4. Medical History", items:[
+    S("pediatrician", "Pediatrician"),
+    YNx("medical_diagnoses", "Does your child have any medical diagnoses?", 2, "If yes, list:"),
+    YNx("dev_ped_neuro", "Has your child ever been seen by a developmental pediatrician or neurologist?", 2, "Name & affiliation:"),
+    YNx("specialists", "Has your child seen any medical specialists?", 3, "Names and affiliations:"),
+    YNx("medication", "Does your child take any medication?", 2, "If yes, list:"),
+    YN("health_insurance", "Does your child have health insurance?", {inl:[O("health_insurance_type", "", ["Private", "NJFamilyCare/Medicaid"])]}),
+    O("child_health", "How would you describe your child's health?", ["Excellent", "Good", "Fair", "Poor"], {single:true}),
+    YN("hospitalized_surgery", "Has your child ever been hospitalized or had any surgeries?", {fu:[
+      Object.assign(T("hospitalizations", "", [
+        {label:"Hospitalization (reason)"}, {label:"Date(s)"}, {label:"Surgery"}, {label:"Date"}
+      ], 3, "1.6fr 1fr 1.6fr 1fr"), {when:"yes"})
+    ]}),
+    YNx("serious_illness", "Has your child ever suffered a serious illness?", 3, "If yes, at what age and explain:"),
+    YNx("serious_injury", "Has your child ever had any serious accidents/injuries?", 3, "If yes, at what age and what type of accident/injury:"),
+    YNx("head_injury", "Has your child ever suffered a head injury?", 2),
+    YN("ear_infections", "Does your child have a history of chronic ear infections?", {fu:[
+      L("ear_infections_explain", "If yes, at what age and how frequent?", 2, {when:"yes"}),
+      L("ear_infections_treatment", "Describe treatment:", 2, {when:"yes"})
+    ]}),
+    YNx("respiratory", "Does your child have a history of chronic colds or respiratory illnesses?", 2, "If yes, at what age and how frequent?"),
+    YNx("high_fevers", "Does your child have a history of high fevers?", 2, "If yes, at what age and how frequent?"),
+    YNx("seizures", "Has your child ever experienced any seizures or convulsions?", 2),
+    YN("allergies", "Does your child have any allergies?", {fu:[
+      L("allergies_type", "If yes, what type?", 2, {when:"yes"}),
+      L("allergies_treatment", "Treatment?", 2, {when:"yes"})
+    ]}),
+    YNx("hearing", "Does your child have any hearing problems?", 2),
+    YNx("vision", "Does your child have any vision problems?", 2),
+    YNx("dental", "Does your child have any dental problems?", 2),
+    O("eating_difficulties", "Does your child have any of the following difficulties with eating?", [
+      "Difficulty sitting at table", "Over eats", "Avoids food due to texture", "Poor food choices", "Picky eater", "Odd eating behaviors/habits"
+    ]),
+    L("foods_liked", "What foods does your child like to eat?", 3),
+    O("sleep_difficulties", "Does your child experience any of the following difficulties with sleep?", [
+      "Difficulty falling asleep/going to bed", "Waking in the night", "Nightmares", "Early morning waking", "Night terrors", "Sleeps too much", "Snoring"
+    ]),
+    YNno("own_bed", "Does your child sleep in his/her own bed?", 2),
+    YNno("own_room", "Does your child sleep in his/her own room?", 2),
+    YN("sleeps_through_night", "Does your child sleep through the night?", {fu:[
+      S("night_wake_frequency", "If no, how frequently does he/she wake?", {when:"no"}),
+      S("night_gets_out_of_bed", "Does he/she get out of bed?", {when:"no"})
+    ]}),
+    YN("naps", "Does your child take a nap?", {fu:[L("naps_explain", "Explain:", 2)]})
+  ]},
+
+  {id:"development", nav:"5 Development", title:"5. Development", items:[
+    S("age_sit_up", "At what age did your child sit up?"),
+    S("age_crawl", "At what age did your child crawl?"),
+    S("age_walk", "At what age did your child walk independently?"),
+    YNx("gross_motor_concerns", "Do you have any gross motor concerns for your child?", 2),
+    YN("scribbles", "Can your child scribble?"),
+    YNx("fine_motor_concerns", "Do you have any fine motor concerns for your child?", 2),
+    S("primary_language", "What is your child's primary language?"),
+    YN("understands_other_language", "Does your child understand another language?", {inl:[S("understands_other_language_list", "If yes, list:")]}),
+    YN("speaks_other_language", "Does your child speak another language?", {inl:[S("speaks_other_language_list", "If yes, list:")]}),
+    O("communication", "How does your child communicate?", ["Words", "Gestures", "Both"], {single:true, fu:[L("communication_comments", "Comments:", 3)]}),
+    YN("responds_to_name", "Does your child respond to his/her name?"),
+    S("age_first_word", "At what age did your child speak his/her first word, besides mama or dada?"),
+    YN("short_phrases", "Does your child put words together in short phrases?", {inl:[S("short_phrases_age", "Age began:")]}),
+    YN("sentences", "Does your child speak in sentences?", {inl:[S("sentences_age", "Age began:")]}),
+    YNx("speech_hard_to_understand", "Does anyone have difficulty understanding your child's speech?", 2),
+    YNx("speech_regression", "Did your child ever start talking and then stop?", 2),
+    YN("follows_directions", "Can your child follow simple directions?"),
+    YN("answers_yes_no", "Can your child answer yes/no questions?", {inl:[O("answers_yes_no_how", "", ["Verbally", "Head shake"])]}),
+    YN("answers_open_ended", "Can your child answer open-ended questions?"),
+    YN("asks_questions", "Does your child ask questions?"),
+    YN("holds_conversation", "Can your child hold a conversation?")
+  ]},
+
+  {id:"interventions", nav:"6 Interventions", title:"6. Interventions / Education", items:[
+    YN("early_intervention", "Does/did your child receive Early Intervention?", {inl:[S("ei_began", "If yes, when did it begin?")]}),
+    G("ei_services", "What EI services does/did your child receive and how often?", [
+      S("ei_di", "DI"), S("ei_st", "ST"), S("ei_ot", "OT"), S("ei_pt", "PT")
+    ]),
+    L("ei_response", "How did your child respond to services?", 3),
+    YN("outpatient_evals", "Has your child ever received outpatient evaluations?", {
+      inl:[O("outpatient_evals_type", "", ["ST", "OT", "PT"])],
+      fu:[L("outpatient_evals_explain", "If yes, when and where?", 2, {when:"yes"})]
+    }),
+    YN("outpatient_services", "Has your child ever received outpatient services?", {
+      inl:[O("outpatient_services_type", "", ["ST", "OT", "PT"])],
+      fu:[L("outpatient_services_explain", "If yes, when, where, and how often?", 2, {when:"yes"})]
+    }),
+    YNx("daycare", "Has your child ever attended daycare?", 2, "If yes, when, where, and how often?"),
+    YNx("preschool", "Has your child ever attended preschool?", 2, "If yes, when, where, and how often?"),
+    YNx("caretaker_concerns", "Has the caretaker/teacher expressed any developmental/behavioral concerns?", 3)
+  ]},
+
+  {id:"academic", nav:"7 Academic", title:"7. Academic Skills", items:[
+    O("identifies_colors", "Is your child able to identify colors?", ["Most", "Some", "Few", "None", "Inconsistent"], {single:true}),
+    O("identifies_shapes", "Is your child able to identify shapes?", ["Circle", "Square", "Triangle", "Others", "None"]),
+    YN("identifies_numbers", "Can your child identify numbers in print?", {inl:[N("identifies_numbers_how_many", "How many?")]}),
+    YN("rote_count", "Can your child rote count?", {inl:[N("rote_count_to", "To what number?")]}),
+    YN("counts_objects", "Can your child count objects?", {inl:[N("counts_objects_to", "To what number?")]}),
+    YN("identifies_letters", "Can your child identify letters in print?", {inl:[N("identifies_letters_how_many", "How many?")]}),
+    YN("recites_alphabet", "Can your child recite the alphabet?", {inl:[S("recites_alphabet_to", "To what letter?")]}),
+    YN("recognizes_name", "Can your child recognize his/her name in print?"),
+    YN("enjoys_being_read_to", "Does your child enjoy being read to?"),
+    YN("looks_at_books", "Does your child look at books independently?"),
+    YN("sorts_colors_shapes", "Does your child sort colors or shapes?"),
+    YN("puzzles", "Is your child able to put puzzle pieces together?"),
+    YN("stacks_blocks", "Is your child able to stack blocks?")
+  ]},
+
+  {id:"social", nav:"8 Social", title:"8. Social / Emotional", items:[
+    L("describe_child", "How would you describe your child in a few words?", 3),
+    L("strengths", "Describe child's strengths", 3),
+    L("weaknesses", "Describe child's weaknesses", 3),
+    YN("peer_opportunity", "Does your child have an opportunity to interact with peers?"),
+    YN("interaction_concerns", "Do you have concerns about the way your child interacts with others?", {fu:[
+      O("interaction_concerns_list", "", [
+        "Plays alongside of peers, but not with them", "Shows excessive familiarity with strangers",
+        "Overly trusting of unfamiliar people", "Resists comforting by caregivers",
+        "Often overly guarded, watchful of others", "Other"
+      ], {when:"yes"}),
+      S("interaction_concerns_other", "Other:", {when:"yes"})
+    ]}),
+    L("play_alone_or_others", "Does your child prefer to play alone or with others?", 2),
+    YN("approaches_peers", "Will your child approach peers to play?", {inl:[O("approaches_peers_how", "", ["Friendly", "Shy"])]}),
+    YN("peer_play", "Does your child interact with peers in play scenarios?", {fu:[L("peer_play_comments", "Comments:", 2)]}),
+    YN("gets_along_with_peers", "Does your child get along well with peers?"),
+    YN("pretend_play", "Does your child demonstrate pretend play?"),
+    YN("plays_independently", "Can your child play independently?"),
+    L("play_preferences", "What does your child prefer to play with?", 2),
+    YN("plays_outside", "Does your child like to play outside?"),
+    YNx("lessons_teams", "Does your child take any lessons or play on any teams?", 2, "If yes, list:"),
+    L("sibling_relationship", "What is your child's relationship like with his/her siblings?", 3),
+    YN("affectionate", "Is your child affectionate?"),
+    L("parent_relationship", "What is your child's relationship like with parents?", 3),
+    YN("separation_difficulty", "Does your child have difficulty separating from parents?"),
+    YN("expresses_feelings", "Is your child able to express his/her feelings appropriately?")
+  ]},
+
+  {id:"behavior", nav:"9 Behavior", title:"9. Behavior", items:[
+    YNx("temper_outbursts", "Does your child have frequent temper outbursts (e.g., yelling, hitting or stomping feet)?", 3, "If yes, what triggers a temper outburst?"),
+    L("typical_outburst", "Please describe a typical temper outburst", 3),
+    L("outburst_frequency", "What is the frequency of your child's temper outbursts (e.g., 5–6 times a day)?", 2),
+    YNx("aggression", "Does your child have problems with physical or verbal aggression?", 3, "If yes, describe:"),
+    O("defiant_behaviors", "Does your child display any of these behaviors?", [
+      "Often loses temper", "Often actively defies or refuses adult requests", "Often angry or resentful", "Often touchy or easily annoyed"
+    ]),
+    YNx("difficult_outings", "Is it difficult to take your child places?", 2),
+    YN("easily_frustrated", "Does your child become easily frustrated?", {fu:[L("easily_frustrated_comments", "Comments:", 2)]}),
+    YN("easily_redirected", "Can your child be easily redirected?"),
+    YN("seeks_help", "Will your child seek out help?"),
+    YNx("transitions", "Does your child have a difficult time with transitions?", 2),
+    YN("time_out", "Do you utilize time out?", {inl:[O("time_out_effect", "", ["Effective", "Ineffective"], {single:true})]}),
+    YN("attends_to_task", "Can your child attend to a task for a reasonable amount of time?", {fu:[L("attends_to_task_comments", "Comments:", 2)]}),
+    O("activity_level", "How would you describe your child's activity level?", ["Typical", "Busy", "Hyper"], {single:true}),
+    YN("activity_impulsive", "Does your child show any difficulties with activity level or impulsive behaviors?"),
+    YN("atypical_behaviors", "Does your child act in any of the following ways?", {fu:[
+      O("atypical_behaviors_list", "", [
+        "Frequently seems unaware of others in the room", "Doesn't play make believe games",
+        "Shows an excessive reaction to noise", "Preoccupied with one particular interest",
+        "Failure to react to touch", "Poor eye contact", "Over reaction to touch",
+        "Echoes or repeats the same phrase over and over", "Repeats the same behavior over and over",
+        "Sensory sensitivities (e.g., textures of foods, smells, upset by bright lights)"
+      ], {when:"yes"})
+    ]}),
+    YNx("seeks_sensory", "Does your child seek out any sensory input?", 2),
+    YN("safety_awareness", "Does your child exhibit safety awareness?"),
+    YN("unafraid_of_danger", "Does your child seem unafraid of dangerous activity (e.g., shows no fear when on high play equipment)?")
+  ]},
+
+  {id:"selfhelp", nav:"10 Self-Help", title:"10. Self-Help", items:[
+    YN("feeds_fingers", "Does your child feed him/herself with fingers?", {inl:[ynInl("feeds_utensils", "Utensils?")]}),
+    YN("messy_eater", "Is your child a messy eater?"),
+    YN("drinks_bottle", "Does your child drink from a bottle?", {inl:[
+      ynInl("drinks_sippy", "Sippy cup?"), ynInl("drinks_straw", "Straw?"), ynInl("drinks_open_cup", "Open cup?")
+    ]}),
+    YN("takes_off_pants", "Can your child take off his/her pants?", {inl:[ynInl("takes_off_shirt", "Shirt?")]}),
+    YN("puts_on_pants", "Can your child put on his/her pants?", {inl:[ynInl("puts_on_shirt", "Shirt?")]}),
+    L("dressing_comments", "Comments", 2),
+    YN("toilet_trained_day", "Is your child toilet trained during the day?", {inl:[ynInl("toilet_trained_night", "Night?")]}),
+    YN("day_diapers", "During the day, does your child wear diapers?", {inl:[ynInl("day_pullups", "Pull-ups?")]}),
+    YN("sits_on_toilet", "Will your child sit on the toilet?"),
+    YN("indicates_toilet_need", "Does your child indicate the need to use the toilet?"),
+    YN("indicates_wet", "Does your child indicate when he/she is wet?", {inl:[ynInl("indicates_soiled", "Soiled?")]}),
+    YN("helps_chores", "Does your child try to help with adult chores around the house?"),
+    YN("cleans_up_independently", "Does your child clean up independently?", {inl:[
+      ynInl("cleans_up_prompts", "With prompts?"), ynInl("cleans_up_assistance", "With assistance?"), ynInl("cleans_up_hand_over_hand", "Hand over hand?")
+    ]}),
+    H("Transportation (if eligible)"),
+    YN("transport_home", "To/from home"),
+    YN("transport_daycare", "To/from daycare", {inl:[S("transport_daycare_which", "If yes, which one?")]})
+  ]}
+];
+
+/* =====================================================================
+   STORAGE — every call wrapped; falls back to memory if unavailable.
+   ===================================================================== */
+var PFX = "psh1:";
+var mem = {};
+var storageOK = (function(){
+  try{ var k = PFX + "probe"; localStorage.setItem(k, "1"); localStorage.removeItem(k); return true; }
+  catch(e){ return false; }
+})();
+function sGet(k){
+  if(storageOK){ try{ return localStorage.getItem(PFX + k); }catch(e){} }
+  return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null;
+}
+function sSet(k, v){
+  mem[k] = v;
+  if(!storageOK) return false;
+  try{ localStorage.setItem(PFX + k, v); return true; }catch(e){ return false; }
+}
+function sDel(k){
+  delete mem[k];
+  if(storageOK){ try{ localStorage.removeItem(PFX + k); }catch(e){} }
+}
+function parse(s){ try{ return s ? JSON.parse(s) : null; }catch(e){ return null; } }
+
+function getIndex(){ var a = parse(sGet("index")); return Array.isArray(a) ? a : []; }
+function setIndex(a){ return sSet("index", JSON.stringify(a)); }
+function loadIv(id){
+  var iv = parse(sGet("iv:" + id));
+  if(!iv || typeof iv !== "object" || !iv.answers || typeof iv.answers !== "object") return null;
+  return iv;
+}
+function allIvs(){
+  return getIndex().map(loadIv).filter(Boolean)
+    .sort(function(a, b){ return (b.updated || "").localeCompare(a.updated || ""); });
+}
+
+function uuid(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  var b = new Uint8Array(16); crypto.getRandomValues(b);
+  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  var h = Array.prototype.map.call(b, function(x){ return (x + 256).toString(16).slice(1); }).join("");
+  return h.slice(0,8) + "-" + h.slice(8,12) + "-" + h.slice(12,16) + "-" + h.slice(16,20) + "-" + h.slice(20);
+}
+function blankIv(){ var t = new Date().toISOString(); return {id:uuid(), created:t, updated:t, answers:{}}; }
+
+/* =====================================================================
+   STATE + SAVING
+   ===================================================================== */
+var cur = null;            // the open interview
+var persisted = false;     // has the open interview been written at least once?
+var saveTimer = null;
+var saveFailed = !storageOK;
+
+function A(){ return cur.answers; }
+
+function isEmpty(v){
+  if(v == null || v === "") return true;
+  if(Array.isArray(v)) return v.length === 0;
+  if(typeof v === "object" && Array.isArray(v.rows))
+    return v.rows.every(function(r){ return r.every(function(c){ return !c; }); });
+  return false;
+}
+
+function setVal(id, v){
+  if(isEmpty(v)) delete cur.answers[id]; else cur.answers[id] = v;
+  scheduleSave();
+  refreshDim(id);
+  refreshProgress();
+  if(id === "student" || id === "date") refreshHeader();
+}
+
+function scheduleSave(){
+  clearTimeout(saveTimer);
+  setSaved("Saving…", "");
+  saveTimer = setTimeout(saveNow, 300);
+}
+function flushSave(){ if(saveTimer){ clearTimeout(saveTimer); saveNow(); } }
+
+function saveNow(){
+  saveTimer = null;
+  cur.updated = new Date().toISOString();
+  var ok = sSet("iv:" + cur.id, JSON.stringify(cur));
+  var idx = getIndex();
+  if(idx.indexOf(cur.id) < 0){ idx.push(cur.id); ok = setIndex(idx) && ok; }
+  ok = sSet("current", cur.id) && ok;
+  persisted = true;
+  saveFailed = !ok;
+  if(ok) setSaved("Saved ✓", "ok");
+  else setSaved(storageOK ? "Not saved ⚠ storage full" : "Not saved ⚠ storage unavailable", "bad");
+}
+
+var $saved = document.getElementById("saved");
+function setSaved(text, cls){ $saved.textContent = text; $saved.className = "saved " + cls; }
+
+window.addEventListener("beforeunload", function(e){
+  flushSave();
+  if(saveFailed){ e.preventDefault(); e.returnValue = ""; return ""; }
+});
+window.addEventListener("pagehide", flushSave);
+document.addEventListener("visibilitychange", function(){ if(document.visibilityState === "hidden") flushSave(); });
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+function el(tag, attrs){
+  var e = document.createElement(tag);
+  if(attrs) for(var k in attrs){
+    var v = attrs[k];
+    if(v == null || v === false) continue;
+    if(k === "class") e.className = v;
+    else if(k === "text") e.textContent = v;
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for(var i = 2; i < arguments.length; i++){
+    var c = arguments[i];
+    if(c == null || c === false) continue;
+    if(Array.isArray(c)) c.forEach(function(x){ if(x) e.appendChild(x); });
+    else e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+
+function fmtDate(v){
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || "");
+  return m ? m[2] + "/" + m[3] + "/" + m[1] : (v || "");
+}
+
+var dimDeps = {};          // parent id -> [{node, when}]
+var sectionQs = {};        // section id -> [[ids counted as one question]]
+var progNodes = {};        // section id -> {head, chip}
+
+/* ----- controls ----- */
+function ctrlInput(it, ariaLabel){
+  var type = it.type === "date" ? "date" : it.type === "tel" ? "tel" : "text";
+  var inp = el("input", {
+    type:type, id:"f_" + it.id, class:"inp", enterkeyhint:"next", autocomplete:"off",
+    inputmode: it.num ? "numeric" : null, pattern: it.num ? "[0-9]*" : null,
+    autocapitalize: type === "text" ? "sentences" : null, "aria-label": ariaLabel || null
+  });
+  var pv = el("div", {class:"pv", "aria-hidden":"true"});
+  var v = A()[it.id];
+  if(typeof v === "string") inp.value = v;
+  function sync(){ pv.textContent = type === "date" ? fmtDate(inp.value) : inp.value; }
+  function commit(){ sync(); setVal(it.id, inp.value); }
+  sync();
+  inp.addEventListener("input", commit);
+  if(type === "date") inp.addEventListener("change", commit);
+  return el("div", {class:"fld"}, inp, pv);
+}
+
+function ctrlText(it, ariaLabel){
+  var ta = el("textarea", {id:"f_" + it.id, class:"ta", rows:it.lines || 2, autocapitalize:"sentences", "aria-label": ariaLabel || null});
+  var pv = el("div", {class:"pv", "aria-hidden":"true"});
+  var v = A()[it.id];
+  if(typeof v === "string") ta.value = v;
+  function sync(){ pv.textContent = ta.value + " "; }
+  sync();
+  ta.addEventListener("input", function(){ sync(); setVal(it.id, ta.value); });
+  return el("div", {class:"grow", style:"--lines:" + (it.lines || 2)}, ta, pv);
+}
+
+function ctrlYN(it, label){
+  var wrap = el("div", {class:"yn", role:"group", "aria-label": label || it.label});
+  var btns = {};
+  function paint(){
+    var v = A()[it.id];
+    for(var k in btns) btns[k].setAttribute("aria-pressed", String(v === k));
+  }
+  [["yes", "Yes"], ["no", "No"]].forEach(function(p){
+    var b = el("button", {type:"button", class:"pill", "aria-pressed":"false", text:p[1]});
+    b.addEventListener("click", function(){
+      setVal(it.id, A()[it.id] === p[0] ? "" : p[0]);   // tapping the selected answer clears it
+      paint();
+    });
+    btns[p[0]] = b; wrap.appendChild(b);
+  });
+  paint();
+  return wrap;
+}
+
+function ctrlOpts(it){
+  var wrap = el("div", {class:"opts" + (it.single ? " single" : ""), role:"group", "aria-label": it.label || "Options"});
+  var btns = [];
+  function selected(){
+    var v = A()[it.id];
+    if(it.single) return typeof v === "string" ? [v] : [];
+    return Array.isArray(v) ? v : [];
+  }
+  function paint(){
+    var s = selected();
+    btns.forEach(function(b){ b.setAttribute("aria-pressed", String(s.indexOf(b.dataset.v) >= 0)); });
+  }
+  it.options.forEach(function(o){
+    var b = el("button", {type:"button", class:"opt", "aria-pressed":"false", "data-v":o, text:o});
+    b.addEventListener("click", function(){
+      var s = selected().slice(), on = s.indexOf(o) >= 0;
+      if(it.single) setVal(it.id, on ? "" : o);
+      else {
+        if(on) s.splice(s.indexOf(o), 1); else s.push(o);
+        // keep the PDF's option order regardless of tap order
+        setVal(it.id, it.options.filter(function(x){ return s.indexOf(x) >= 0; }));
+      }
+      paint();
+    });
+    btns.push(b); wrap.appendChild(b);
+  });
+  paint();
+  return wrap;
+}
+
+function ctrlTable(it){
+  var cols = it.cols;
+  var saved = A()[it.id];
+  var rows = saved && Array.isArray(saved.rows)
+    ? saved.rows.map(function(r){ return cols.map(function(_, i){ return typeof r[i] === "string" ? r[i] : ""; }); })
+    : [];
+  while(rows.length < it.rows) rows.push(cols.map(function(){ return ""; }));
+  var gtc = it.gtc || "repeat(" + cols.length + ", minmax(0,1fr))";
+
+  var tbl = el("div", {class:"tbl", style:"--gtc:" + gtc});
+  tbl.appendChild(el("div", {class:"tr th", "aria-hidden":"true"},
+    cols.map(function(c){ return el("div", {class:"td", text:c.label}); }),
+    el("div", {class:"td rmcell"})));
+  var body = el("div", {class:"tbl"});
+  tbl.appendChild(body);
+
+  function commit(){ setVal(it.id, {rows: rows.map(function(r){ return r.slice(); })}); }
+
+  function addRowEl(r){
+    var n = rows.indexOf(r) + 1;
+    var tr = el("div", {class:"tr"});
+    cols.forEach(function(c, ci){
+      var inp = el("input", {type:c.type === "date" ? "date" : "text", class:"inp", enterkeyhint:"next", autocomplete:"off",
+        autocapitalize:"words", "aria-label": c.label + ", row " + n});
+      var pv = el("div", {class:"pv", "aria-hidden":"true"});
+      inp.value = r[ci];
+      function sync(){ pv.textContent = c.type === "date" ? fmtDate(inp.value) : inp.value; }
+      function upd(){ r[ci] = inp.value; sync(); commit(); }
+      sync();
+      inp.addEventListener("input", upd);
+      if(c.type === "date") inp.addEventListener("change", upd);
+      tr.appendChild(el("label", {class:"td"}, el("span", {class:"cl", text:c.label}), el("div", {class:"fld"}, inp, pv)));
+    });
+    var cell = el("div", {class:"rmcell"});
+    if(n > it.rows){
+      var rm = el("button", {type:"button", class:"rm", "aria-label":"Remove row " + n, text:"×"});
+      rm.addEventListener("click", function(){
+        if(r.some(Boolean) && !confirm("Remove this row and what's typed in it?")) return;
+        rows.splice(rows.indexOf(r), 1); tr.remove(); commit();
+      });
+      cell.appendChild(rm);
+    }
+    tr.appendChild(cell);
+    body.appendChild(tr);
+    return tr;
+  }
+  rows.forEach(addRowEl);
+
+  var add = el("button", {type:"button", class:"btn addrow", text:"+ Add row"});
+  add.addEventListener("click", function(){
+    var r = cols.map(function(){ return ""; });
+    rows.push(r);
+    var tr = addRowEl(r);
+    tr.querySelector("input").focus();
+  });
+  return el("div", null, tbl, add);
+}
+
+/* ----- items ----- */
+function registerDim(node, parentId, when){
+  if(!when) return;
+  node.dataset.when = when;
+  (dimDeps[parentId] = dimDeps[parentId] || []).push({node:node, when:when});
+}
+function refreshDim(parentId){
+  var deps = dimDeps[parentId]; if(!deps) return;
+  var v = A()[parentId];
+  deps.forEach(function(d){ d.node.classList.toggle("dim", v !== d.when); });
+}
+
+function renderInline(p){
+  if(p.t === "short") return el("label", {class:"inl"}, el("span", {text:p.label}), ctrlInput(p));
+  if(p.t === "yn") return el("div", {class:"inl"}, el("span", {text:p.label}), ctrlYN(p, p.label));
+  if(p.t === "opts") return ctrlOpts(p);
+}
+
+function renderFollowup(f, parent){
+  var node;
+  var lab = f.label ? el("label", {class:"flabel", for:"f_" + f.id, text:f.label}) : null;
+  if(f.t === "long") node = el("div", {class:"fu"}, lab, ctrlText(f));
+  else if(f.t === "short") node = el("div", {class:"fu row"}, lab, ctrlInput(f));
+  else if(f.t === "opts") node = el("div", {class:"fu"}, lab, ctrlOpts(Object.assign({}, f, {label: f.label || parent.label})));
+  else if(f.t === "table") node = el("div", {class:"fu"}, ctrlTable(f));
+  registerDim(node, parent.id, f.when);
+  return node;
+}
+
+function renderItem(it, sec, qs){
+  var fus = (it.fu || []).map(function(f){ return renderFollowup(f, it); });
+  var ids = [it.id];
+  var node;
+  switch(it.t){
+    case "h":
+      return el("h3", {class:"subhead", text:it.label});
+    case "short":
+      node = sec.grid
+        ? el("div", {class:"q stack"}, el("label", {class:"qlabel", for:"f_" + it.id, text:it.label}), ctrlInput(it))
+        : el("div", {class:"q"}, el("div", {class:"qrow"}, el("label", {class:"qlabel", for:"f_" + it.id, text:it.label}), ctrlInput(it)));
+      break;
+    case "long":
+      node = el("div", {class:"q long"}, el("label", {class:"qlabel", for:"f_" + it.id, text:it.label}), ctrlText(it));
+      break;
+    case "yn":
+      var inl = (it.inl || []).map(renderInline);
+      (it.inl || []).forEach(function(p){ ids.push(p.id); });
+      node = el("div", {class:"q"},
+        el("div", {class:"qrow"}, el("p", {class:"qlabel", text:it.label}), el("div", {class:"ctrls"}, ctrlYN(it), inl)));
+      break;
+    case "opts":
+      node = el("div", {class:"q stack"}, el("p", {class:"qlabel", text:it.label}), ctrlOpts(it));
+      break;
+    case "table":
+      node = el("div", {class:"q tableq"}, el("p", {class:"qlabel", text:it.label}), ctrlTable(it));
+      break;
+    case "group":
+      ids = it.parts.map(function(p){ return p.id; });
+      node = el("div", {class:"q stack"}, el("p", {class:"qlabel", text:it.label}),
+        el("div", {class:"minis"}, it.parts.map(function(p){
+          return el("label", {class:"mini"}, el("span", {text:p.label}), ctrlInput(p, it.label + " " + p.label));
+        })));
+      break;
+  }
+  fus.forEach(function(f){ node.appendChild(f); });
+  qs.push(ids);
+  return node;
+}
+
+var $form = document.getElementById("form");
+var $nav = document.getElementById("secnav");
+
+function renderForm(){
+  dimDeps = {}; sectionQs = {}; progNodes = {};
+  $form.textContent = ""; $nav.textContent = "";
+  SECTIONS.forEach(function(sec){
+    var qs = sectionQs[sec.id] = [];
+    var prog = el("span", {class:"prog"});
+    var items = el("div", {class:"items" + (sec.grid ? " grid" : "")});
+    var section = el("section", {class:"sec", id:"sec-" + sec.id, "aria-labelledby":"h-" + sec.id},
+      el("div", {class:"sechead"}, el("h2", {id:"h-" + sec.id, text:sec.title}), prog), items);
+    sec.items.forEach(function(it){ items.appendChild(renderItem(it, sec, qs)); });
+    $form.appendChild(section);
+
+    var small = el("small");
+    var chip = el("a", {class:"nchip", href:"#sec-" + sec.id, "data-sec":sec.id}, el("span", {text:sec.nav}), small);
+    chip.addEventListener("click", function(e){ e.preventDefault(); jumpTo(sec.id); });
+    $nav.appendChild(chip);
+    progNodes[sec.id] = {head:prog, chip:small};
+  });
+  Object.keys(dimDeps).forEach(refreshDim);
+  refreshProgress();
+  refreshHeader();
+  measureTop();
+  onScroll();
+}
+
+function refreshProgress(){
+  var a = A();
+  SECTIONS.forEach(function(sec){
+    var qs = sectionQs[sec.id], done = 0;
+    qs.forEach(function(ids){ if(ids.some(function(id){ return !isEmpty(a[id]); })) done++; });
+    var p = progNodes[sec.id];
+    p.head.textContent = done + " of " + qs.length + " answered";
+    p.head.classList.toggle("done", done === qs.length);
+    p.chip.textContent = done + "/" + qs.length;
+  });
+}
+
+function ivLabel(iv){
+  var s = (iv.answers.student || "").trim();
+  if(s) return s + (iv.answers.date ? " – " + fmtDate(iv.answers.date) : "");
+  return "Untitled – " + new Date(iv.created).toLocaleDateString();
+}
+function refreshHeader(){
+  var s = (A().student || "").trim();
+  document.getElementById("hdrStudent").textContent = s ? "· " + s : "";
+  document.title = s ? s + " – Social History" : "Preschool Social History";
+}
+
+/* =====================================================================
+   NAVIGATION, KEYBOARD, VIEWPORT
+   ===================================================================== */
+var $top = document.getElementById("top");
+var topH = 120;
+function measureTop(){
+  topH = $top.offsetHeight;
+  document.documentElement.style.setProperty("--top", topH + "px");
+}
+window.addEventListener("resize", measureTop);
+
+function jumpTo(id){
+  var s = document.getElementById("sec-" + id);
+  window.scrollTo({top: s.getBoundingClientRect().top + window.pageYOffset - topH - 8, behavior:"smooth"});
+}
+
+var activeSec = null, scrollQueued = false;
+function onScroll(){
+  if(scrollQueued) return;
+  scrollQueued = true;
+  requestAnimationFrame(function(){
+    scrollQueued = false;
+    var id = SECTIONS[0].id;
+    SECTIONS.forEach(function(sec){
+      var s = document.getElementById("sec-" + sec.id);
+      if(s && s.getBoundingClientRect().top <= topH + 40) id = sec.id;
+    });
+    if((window.innerHeight + window.pageYOffset) >= document.documentElement.scrollHeight - 4)
+      id = SECTIONS[SECTIONS.length - 1].id;
+    if(id === activeSec) return;
+    activeSec = id;
+    Array.prototype.forEach.call($nav.children, function(c){
+      var on = c.dataset.sec === id;
+      c.classList.toggle("on", on);
+      if(on){
+        var l = c.offsetLeft - 16, r = c.offsetLeft + c.offsetWidth + 16;
+        if(l < $nav.scrollLeft) $nav.scrollLeft = l;
+        else if(r > $nav.scrollLeft + $nav.clientWidth) $nav.scrollLeft = r - $nav.clientWidth;
+      }
+    });
+  });
+}
+window.addEventListener("scroll", onScroll, {passive:true});
+
+// "Next"/Return on a one-line field moves to the next field in document order.
+$form.addEventListener("keydown", function(e){
+  if(e.key !== "Enter" || !e.target.matches("input.inp")) return;
+  e.preventDefault();
+  var all = Array.prototype.slice.call($form.querySelectorAll("input.inp, textarea.ta"));
+  var next = all[all.indexOf(e.target) + 1];
+  if(next) next.focus(); else e.target.blur();
+});
+
+// Keep the focused field clear of the sticky header and the on-screen keyboard.
+function ensureVisible(t){
+  if(document.activeElement !== t) return;
+  var vv = window.visualViewport;
+  var vh = vv ? vv.height : window.innerHeight;
+  var off = vv ? vv.offsetTop : 0;
+  var r = t.getBoundingClientRect();
+  var top = r.top - off, bottom = Math.min(r.bottom, r.top + 140) - off;
+  var limit = Math.max(0, topH - off) + 10;
+  if(top < limit) window.scrollBy(0, top - limit);
+  else if(bottom > vh - 16) window.scrollBy(0, Math.min(bottom - (vh - 16), top - limit));
+}
+document.addEventListener("focusin", function(e){
+  var t = e.target;
+  if(!t.matches || !t.matches(".inp, .ta")) return;
+  setTimeout(function(){ ensureVisible(t); }, 350);
+});
+if(window.visualViewport) window.visualViewport.addEventListener("resize", function(){
+  var t = document.activeElement;
+  if(t && t.matches && t.matches(".inp, .ta")) setTimeout(function(){ ensureVisible(t); }, 50);
+});
+
+/* =====================================================================
+   INTERVIEW MANAGER
+   ===================================================================== */
+var $sheet = document.getElementById("sheet");
+var $list = document.getElementById("ivlist");
+var $toast = document.getElementById("toast");
+var toastTimer;
+function toast(msg){
+  $toast.textContent = msg; $toast.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(function(){ $toast.classList.remove("show"); }, 2200);
+}
+
+function openIv(iv, isPersisted){
+  flushSave();
+  cur = iv; persisted = !!isPersisted;
+  if(persisted){ sSet("current", cur.id); setSaved(saveFailed ? "Not saved ⚠" : "Saved ✓", saveFailed ? "bad" : "ok"); }
+  else setSaved("", "");
+  renderForm();
+  window.scrollTo(0, 0);
+}
+
+function startNew(){
+  var hasContent = Object.keys(A()).length > 0;
+  if(hasContent && !confirm("Start a new, blank interview?\n\nThe current interview stays saved under Interviews.")) return false;
+  openIv(blankIv(), false);
+  toast("New interview started");
+  return true;
+}
+
+function renderList(){
+  flushSave();
+  $list.textContent = "";
+  var ivs = allIvs();
+  if(!persisted && Object.keys(A()).length === 0)
+    $list.appendChild(el("li", null, el("div", {class:"ivname"}, el("b", {text:"New interview (blank)"}), el("span", {class:"cur", text:"Open now"}))));
+  if(!ivs.length){ $list.appendChild(el("li", {class:"empty", text:"No saved interviews yet. Answers save automatically as you type."})); return; }
+  ivs.forEach(function(iv){
+    var isCur = iv.id === cur.id;
+    var btnOpen = el("button", {type:"button", class:"btn" + (isCur ? "" : " primary"), text: isCur ? "Open" : "Open"});
+    var btnDup = el("button", {type:"button", class:"btn", text:"Duplicate"});
+    var btnDel = el("button", {type:"button", class:"btn danger", text:"Delete"});
+    btnOpen.addEventListener("click", function(){ closeSheet(); if(!isCur) openIv(loadIv(iv.id), true); });
+    btnDup.addEventListener("click", function(){
+      var t = new Date().toISOString();
+      var copy = {id:uuid(), created:t, updated:t, answers:JSON.parse(JSON.stringify(iv.answers))};
+      var ok = sSet("iv:" + copy.id, JSON.stringify(copy));
+      var idx = getIndex(); idx.push(copy.id); ok = setIndex(idx) && ok;
+      if(!ok){ alert("Couldn't save the copy — this device's storage is full or unavailable."); return; }
+      closeSheet(); openIv(copy, true); toast("Copy opened — edit away");
+    });
+    btnDel.addEventListener("click", function(){
+      if(!confirm('Delete "' + ivLabel(iv) + '"?\n\nThis permanently removes it from this device and cannot be undone.')) return;
+      sDel("iv:" + iv.id);
+      setIndex(getIndex().filter(function(x){ return x !== iv.id; }));
+      if(isCur){
+        var rest = allIvs();
+        if(rest.length) openIv(rest[0], true);
+        else { sDel("current"); openIv(blankIv(), false); }
+      }
+      toast("Interview deleted");
+      renderList();
+    });
+    $list.appendChild(el("li", null,
+      el("div", {class:"ivname"}, el("b", {text:ivLabel(iv)}),
+        el("small", {text:"Updated " + new Date(iv.updated).toLocaleString([], {dateStyle:"medium", timeStyle:"short"})}),
+        isCur ? el("span", {class:"cur", text:" · Open now"}) : null),
+      btnOpen, btnDup, btnDel));
+  });
+}
+function openSheet(){ renderList(); $sheet.hidden = false; document.getElementById("sheetClose").focus(); }
+function closeSheet(){ $sheet.hidden = true; }
+$sheet.addEventListener("click", function(e){ if(e.target === $sheet) closeSheet(); });
+document.addEventListener("keydown", function(e){ if(e.key === "Escape" && !$sheet.hidden) closeSheet(); });
+document.getElementById("sheetClose").addEventListener("click", closeSheet);
+document.getElementById("sheetNew").addEventListener("click", function(){ if(startNew()) closeSheet(); });
+document.getElementById("btnList").addEventListener("click", openSheet);
+document.getElementById("btnNew").addEventListener("click", startNew);
+
+/* =====================================================================
+   PRINT / EXPORT / IMPORT
+   ===================================================================== */
+document.getElementById("btnPrint").addEventListener("click", function(){
+  flushSave();
+  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  window.print();
+});
+
+function safeName(s){ return (s || "").trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }
+
+document.getElementById("btnExport").addEventListener("click", function(){
+  flushSave();
+  var a = A();
+  var name = "SocialHistory_" + (safeName(a.student) || "Untitled") + "_" +
+    (a.date || new Date().toISOString().slice(0, 10)) + ".json";
+  var data = {app:"preschool-social-history", version:1, id:cur.id, created:cur.created, updated:cur.updated, answers:a};
+  var blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+  // iOS: the Share sheet offers Save to Files, AirDrop, and Mail in one place.
+  if(window.File && navigator.canShare){
+    try{
+      var file = new File([blob], name, {type:"application/json"});
+      if(navigator.canShare({files:[file]})){
+        navigator.share({files:[file], title:name}).catch(function(err){
+          if(!err || err.name !== "AbortError") download(blob, name);
+        });
+        return;
+      }
+    }catch(e){}
+  }
+  download(blob, name);
+});
+function download(blob, name){
+  var url = URL.createObjectURL(blob);
+  var link = el("a", {href:url, download:name});
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+}
+
+var $file = document.getElementById("fileImport");
+document.getElementById("btnImport").addEventListener("click", function(){ $file.value = ""; $file.click(); });
+$file.addEventListener("change", function(){
+  var f = $file.files && $file.files[0];
+  if(!f) return;
+  var rd = new FileReader();
+  rd.onload = function(){
+    var data = parse(rd.result);
+    var answers = data && cleanAnswers(data.answers);
+    if(!answers){ alert("That file isn't a Social History export."); return; }
+    var t = new Date().toISOString();
+    var iv = {
+      id: typeof data.id === "string" && data.id ? data.id : uuid(),
+      created: typeof data.created === "string" ? data.created : t,
+      updated: typeof data.updated === "string" ? data.updated : t,
+      answers: answers
+    };
+    var idx = getIndex();
+    if(idx.indexOf(iv.id) >= 0){
+      if(!confirm("This interview is already saved on this device.\n\nReplace the saved copy with the file?")) return;
+    } else idx.push(iv.id);
+    var ok = sSet("iv:" + iv.id, JSON.stringify(iv)) && setIndex(idx);
+    if(!ok) saveFailed = true;
+    openIv(iv, true);
+    toast(ok ? "Interview imported" : "Imported, but couldn't save to this device");
+  };
+  rd.onerror = function(){ alert("Couldn't read that file."); };
+  rd.readAsText(f);
+});
+
+// Accept only the value shapes the form itself writes.
+function cleanAnswers(a){
+  if(!a || typeof a !== "object" || Array.isArray(a)) return null;
+  var out = {};
+  Object.keys(a).forEach(function(k){
+    var v = a[k];
+    if(typeof v === "string") out[k] = v;
+    else if(Array.isArray(v)) out[k] = v.filter(function(x){ return typeof x === "string"; });
+    else if(v && Array.isArray(v.rows))
+      out[k] = {rows: v.rows.filter(Array.isArray).map(function(r){ return r.map(function(c){ return typeof c === "string" ? c : ""; }); })};
+  });
+  return out;
+}
+
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+(function boot(){
+  var id = sGet("current");
+  var iv = id && loadIv(id);
+  if(iv) return openIv(iv, true);
+  var ivs = allIvs();
+  if(ivs.length) return openIv(ivs[0], true);
+  openIv(blankIv(), false);
+})();
+if(!storageOK) setSaved("Not saved ⚠ storage unavailable", "bad");
+
+if("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")){
+  window.addEventListener("load", function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); });
+}
+})();
+</script>
+</body>
+</html>
