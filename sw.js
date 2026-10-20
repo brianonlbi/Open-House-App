@@ -1,5 +1,5 @@
 /* Caches the app on the iPad so it opens with no internet at the property. */
-var CACHE = "seegers-openhouse-v2";
+var CACHE = "seegers-openhouse-v3";
 var ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon.png"];
 
 self.addEventListener("install", function(e){
@@ -13,7 +13,8 @@ self.addEventListener("activate", function(e){
   e.waitUntil(
     caches.keys().then(function(keys){
       return Promise.all(keys.map(function(k){
-        if(k !== CACHE) return caches.delete(k);
+        // Other apps share this origin; only clear our own old versions.
+        if(k.indexOf("seegers-openhouse-") === 0 && k !== CACHE) return caches.delete(k);
       }));
     }).then(function(){ return self.clients.claim(); })
   );

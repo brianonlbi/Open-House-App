@@ -1,5 +1,8 @@
 # Open House Sign In — RE/MAX at Barnegat Bay / The Seegers Group
 
+> Also in this repo: the **Preschool Social History** interview form, in
+> [`social-history/`](social-history/README.md).
+
 A full-screen iPad sign-in sheet for open houses. Everything is stored on the iPad
 itself; when the open house is over you export a CSV and AirDrop or email it to
 your work computer. No accounts, no server, no internet required at the property.
