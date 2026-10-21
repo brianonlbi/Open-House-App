@@ -41,20 +41,29 @@ switch and import them at the new address.
 
 ## Using it
 
-- **Interviews ▾** lists saved interviews by student name and date. You can open,
-  duplicate (handy for siblings), or delete each one.
-- **New** starts a blank interview. The current one stays saved.
+- **Cover sheet:** the app opens here. Type the student's name, check the date
+  (today is filled in), and tap **Start questionnaire**. The questionnaire opens
+  with the name and date already filled in. Saved interviews are listed below,
+  with **Continue**, **Duplicate** (handy for siblings) and **Delete**.
+- If the app is closed partway through an interview, it reopens on that interview.
+- **Interviews** goes back to the cover sheet. **New** does too, with the cursor
+  in the name box.
 - **Yes/No:** tap to choose. Tap the chosen answer again to clear it.
 - "If yes, explain" boxes are always available. They stay dimmed until the
   answer that needs them is chosen.
 - The chips under the header jump to each section and show how many questions
   are answered.
-- **Print / PDF** opens the iOS print sheet. To get a PDF, choose **Save to
-  Files** from the share icon in the print preview (or pinch outward on the
-  preview).
-- **Export** saves the open interview as `SocialHistory_{Student}_{Date}.json`
-  via the Share sheet (Save to Files, AirDrop, Mail). **Import** loads such a
-  file back, for example on another iPad.
+- **Print / PDF:** on the iPad, the form builds a PDF (a cover page, then every
+  question) and opens the Share sheet. Choose **Print**, **Save to Files**,
+  AirDrop or Mail. iPadOS ignores the normal print command in Home Screen apps,
+  so this is how printing works there. On a computer it opens the regular print
+  dialog.
+- **Export** shares the open interview as `SocialHistory_{Student}_{Date}.json`
+  the same way. **Import** (header or cover sheet) loads such a file back, for
+  example on another iPad.
+- If the Share sheet can't open, a "Your file is ready" box appears instead. Tap
+  **Open file** to view and share the file. For exports, **Copy text** is also
+  offered.
 
 ## Don't lose interviews
 
