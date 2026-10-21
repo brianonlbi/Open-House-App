@@ -157,20 +157,42 @@
     .tr .rm{justify-self:end}
   }
 
-  /* interview manager */
-  .overlay{position:fixed; inset:0; z-index:50; background:rgba(10,15,20,.45); display:flex; align-items:flex-start; justify-content:center; padding:60px 16px 16px}
-  .overlay[hidden]{display:none}
-  .panel{background:var(--card); border-radius:16px; width:100%; max-width:640px; max-height:calc(100vh - 80px); display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.3)}
-  .panel header{display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line)}
-  .panel header h2{flex:1; margin:0; font-size:19px}
-  .ivlist{list-style:none; margin:0; padding:6px 16px 12px; overflow-y:auto; -webkit-overflow-scrolling:touch}
+  /* cover sheet */
+  body.on-cover .top, body.on-cover main, body.on-cover .phead{display:none !important}
+  .cover{max-width:720px; margin:0 auto; padding:32px 16px 60px}
+  .cover[hidden]{display:none}
+  .ccard{background:var(--card); border:1px solid var(--line); border-radius:18px; padding:24px; margin-bottom:20px}
+  .cbrand{display:flex; align-items:center; gap:16px; margin-bottom:18px}
+  .cbrand img{width:64px; height:64px; border-radius:14px}
+  .cbrand h1{margin:0; font-size:26px; line-height:1.2}
+  .muted{color:var(--muted); font-size:15px; margin:2px 0 0}
+  .clabel{display:block; font-weight:700; margin:16px 0 6px}
+  .cover .inp{font-size:19px; min-height:52px}
+  .cmsg{color:var(--warn); font-weight:600; min-height:1.4em; margin:8px 0 0}
+  .btn.big{width:100%; min-height:56px; font-size:19px; margin-top:12px}
+  .listhead{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:4px}
+  .listhead h2{margin:0; font-size:20px}
+  .ivlist{list-style:none; margin:0; padding:0}
   .ivlist li{display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; padding:12px 0; border-bottom:1px solid var(--line)}
   .ivlist li:last-child{border-bottom:0}
   .ivname{flex:1 1 220px; min-width:0}
   .ivname b{display:block; overflow-wrap:anywhere}
   .ivname small{color:var(--muted); font-size:13px}
-  .ivlist .cur{color:var(--ok); font-weight:700; font-size:13px}
   .empty{color:var(--muted); padding:16px 0}
+  label.btn{display:inline-flex; align-items:center; justify-content:center}
+  .vh{position:absolute; width:1px; height:1px; overflow:hidden; opacity:0; clip:rect(0 0 0 0); pointer-events:none}
+  a.btn{display:inline-flex; align-items:center; text-decoration:none; color:inherit}
+  a.btn.primary{color:var(--accent-ink)}
+
+  /* "file is ready" sheet, used when the Share sheet isn't available */
+  .overlay{position:fixed; inset:0; z-index:50; background:rgba(10,15,20,.45); display:flex; align-items:flex-start; justify-content:center; padding:80px 16px 16px}
+  .overlay[hidden]{display:none}
+  .panel{background:var(--card); border-radius:16px; width:100%; max-width:520px; box-shadow:0 20px 60px rgba(0,0,0,.3)}
+  .panel header{display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line)}
+  .panel header h2{flex:1; margin:0; font-size:19px}
+  .panelbody{padding:12px 16px 18px}
+  .panelbody p{margin:6px 0 14px}
+  .btnrow{display:flex; flex-wrap:wrap; gap:8px}
 
   .toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(120px); background:var(--text); color:var(--bg); padding:12px 18px; border-radius:12px; font-weight:600; z-index:60; transition:transform .2s; max-width:calc(100% - 32px)}
   .toast.show{transform:translateX(-50%) translateY(0)}
@@ -236,12 +258,11 @@
       </div>
     </div>
     <div class="actions">
-      <button type="button" class="btn" id="btnList" aria-haspopup="dialog">Interviews ▾</button>
+      <button type="button" class="btn" id="btnHome">Interviews</button>
       <button type="button" class="btn" id="btnNew">New</button>
       <button type="button" class="btn" id="btnPrint">Print / PDF</button>
       <button type="button" class="btn" id="btnExport">Export</button>
-      <button type="button" class="btn" id="btnImport">Import</button>
-      <input type="file" id="fileImport" accept=".json,application/json" hidden>
+      <label class="btn" for="fileImport" role="button">Import</label>
     </div>
   </header>
   <nav class="secnav" id="secnav" aria-label="Sections"></nav>
@@ -250,14 +271,49 @@
 <div class="print-only phead"><h1>Preschool Social History</h1></div>
 <main id="form"></main>
 
-<div class="overlay" id="sheet" hidden>
-  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
-    <header>
-      <h2 id="sheetTitle">Saved interviews</h2>
-      <button type="button" class="btn primary" id="sheetNew">+ New</button>
-      <button type="button" class="btn" id="sheetClose">Close</button>
-    </header>
+<div class="cover" id="cover" hidden>
+  <div class="ccard">
+    <div class="cbrand">
+      <img src="icon.png" alt="">
+      <div>
+        <h1>Preschool Social History</h1>
+        <p class="muted">Answers are stored only on this device.</p>
+      </div>
+    </div>
+    <form id="coverForm" novalidate>
+      <label class="clabel" for="coverStudent">Student's name</label>
+      <input class="inp" id="coverStudent" type="text" autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="go">
+      <label class="clabel" for="coverDate">Date of questionnaire</label>
+      <input class="inp" id="coverDate" type="date">
+      <p class="cmsg" id="coverMsg" role="alert"></p>
+      <button type="submit" class="btn primary big">Start questionnaire →</button>
+    </form>
+  </div>
+  <div class="ccard">
+    <div class="listhead">
+      <h2>Saved interviews</h2>
+      <label class="btn" for="fileImport" role="button">Import file</label>
+    </div>
     <ul class="ivlist" id="ivlist"></ul>
+  </div>
+</div>
+
+<input type="file" id="fileImport" class="vh" tabindex="-1" aria-hidden="true">
+
+<div class="overlay" id="saveSheet" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="saveTitle">
+    <header>
+      <h2 id="saveTitle">Your file is ready</h2>
+      <button type="button" class="btn" id="saveClose">Close</button>
+    </header>
+    <div class="panelbody">
+      <p><b id="saveName"></b></p>
+      <p class="muted" id="saveHint"></p>
+      <div class="btnrow">
+        <a class="btn primary" id="saveOpen" target="_blank" rel="noopener">Open file</a>
+        <button type="button" class="btn" id="saveCopy" hidden>Copy text</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -632,7 +688,7 @@ function scheduleSave(){
   setSaved("Saving…", "");
   saveTimer = setTimeout(saveNow, 300);
 }
-function flushSave(){ if(saveTimer){ clearTimeout(saveTimer); saveNow(); } }
+function flushSave(){ if(saveTimer){ clearTimeout(saveTimer); if(cur) saveNow(); else saveTimer = null; } }
 
 function saveNow(){
   saveTimer = null;
@@ -939,8 +995,8 @@ function ivLabel(iv){
   return "Untitled – " + new Date(iv.created).toLocaleDateString();
 }
 function refreshHeader(){
-  var s = (A().student || "").trim();
-  document.getElementById("hdrStudent").textContent = s ? "· " + s : "";
+  var s = (A().student || "").trim(), d = fmtDate(A().date);
+  document.getElementById("hdrStudent").textContent = (s ? "· " + s : "") + (d ? " · " + d : "");
   document.title = s ? s + " – Social History" : "Preschool Social History";
 }
 
@@ -1020,15 +1076,22 @@ if(window.visualViewport) window.visualViewport.addEventListener("resize", funct
 });
 
 /* =====================================================================
-   INTERVIEW MANAGER
+   SCREENS: cover sheet -> questionnaire
    ===================================================================== */
-var $sheet = document.getElementById("sheet");
+var $cover = document.getElementById("cover");
 var $list = document.getElementById("ivlist");
+var $coverStudent = document.getElementById("coverStudent");
+var $coverDate = document.getElementById("coverDate");
+var $coverMsg = document.getElementById("coverMsg");
 var $toast = document.getElementById("toast");
 var toastTimer;
 function toast(msg){
   $toast.textContent = msg; $toast.classList.add("show");
-  clearTimeout(toastTimer); toastTimer = setTimeout(function(){ $toast.classList.remove("show"); }, 2200);
+  clearTimeout(toastTimer); toastTimer = setTimeout(function(){ $toast.classList.remove("show"); }, 2600);
+}
+function todayISO(){
+  var d = new Date();
+  return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
 }
 
 function openIv(iv, isPersisted){
@@ -1036,116 +1099,463 @@ function openIv(iv, isPersisted){
   cur = iv; persisted = !!isPersisted;
   if(persisted){ sSet("current", cur.id); setSaved(saveFailed ? "Not saved ⚠" : "Saved ✓", saveFailed ? "bad" : "ok"); }
   else setSaved("", "");
+  document.body.classList.remove("on-cover");
+  $cover.hidden = true;
+  sSet("view", "form");
   renderForm();
   window.scrollTo(0, 0);
 }
 
-function startNew(){
-  var hasContent = Object.keys(A()).length > 0;
-  if(hasContent && !confirm("Start a new, blank interview?\n\nThe current interview stays saved under Interviews.")) return false;
-  openIv(blankIv(), false);
-  toast("New interview started");
-  return true;
+function showCover(focusName){
+  flushSave();
+  document.body.classList.add("on-cover");
+  $cover.hidden = false;
+  sSet("view", "cover");
+  $coverStudent.value = "";
+  $coverDate.value = todayISO();
+  $coverMsg.textContent = "";
+  document.title = "Preschool Social History";
+  renderList();
+  window.scrollTo(0, 0);
+  if(focusName) $coverStudent.focus();
 }
 
+document.getElementById("coverForm").addEventListener("submit", function(e){
+  e.preventDefault();
+  var name = $coverStudent.value.trim();
+  if(!name){ $coverMsg.textContent = "Enter the student's name to begin."; $coverStudent.focus(); return; }
+  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  var iv = blankIv();
+  iv.answers.student = name;
+  iv.answers.date = $coverDate.value || todayISO();
+  cur = iv; saveNow();
+  openIv(iv, true);
+  toast("Questionnaire started for " + name);
+});
+
 function renderList(){
-  flushSave();
   $list.textContent = "";
   var ivs = allIvs();
-  if(!persisted && Object.keys(A()).length === 0)
-    $list.appendChild(el("li", null, el("div", {class:"ivname"}, el("b", {text:"New interview (blank)"}), el("span", {class:"cur", text:"Open now"}))));
   if(!ivs.length){ $list.appendChild(el("li", {class:"empty", text:"No saved interviews yet. Answers save automatically as you type."})); return; }
   ivs.forEach(function(iv){
-    var isCur = iv.id === cur.id;
-    var btnOpen = el("button", {type:"button", class:"btn" + (isCur ? "" : " primary"), text: isCur ? "Open" : "Open"});
+    var btnOpen = el("button", {type:"button", class:"btn primary", text:"Continue"});
     var btnDup = el("button", {type:"button", class:"btn", text:"Duplicate"});
     var btnDel = el("button", {type:"button", class:"btn danger", text:"Delete"});
-    btnOpen.addEventListener("click", function(){ closeSheet(); if(!isCur) openIv(loadIv(iv.id), true); });
+    btnOpen.addEventListener("click", function(){ var x = loadIv(iv.id); if(x) openIv(x, true); });
     btnDup.addEventListener("click", function(){
       var t = new Date().toISOString();
       var copy = {id:uuid(), created:t, updated:t, answers:JSON.parse(JSON.stringify(iv.answers))};
       var ok = sSet("iv:" + copy.id, JSON.stringify(copy));
       var idx = getIndex(); idx.push(copy.id); ok = setIndex(idx) && ok;
       if(!ok){ alert("Couldn't save the copy — this device's storage is full or unavailable."); return; }
-      closeSheet(); openIv(copy, true); toast("Copy opened — edit away");
+      openIv(copy, true); toast("Copy opened — change the name if it's a sibling");
     });
     btnDel.addEventListener("click", function(){
       if(!confirm('Delete "' + ivLabel(iv) + '"?\n\nThis permanently removes it from this device and cannot be undone.')) return;
       sDel("iv:" + iv.id);
       setIndex(getIndex().filter(function(x){ return x !== iv.id; }));
-      if(isCur){
-        var rest = allIvs();
-        if(rest.length) openIv(rest[0], true);
-        else { sDel("current"); openIv(blankIv(), false); }
-      }
+      if(cur && cur.id === iv.id){ cur = null; sDel("current"); }
       toast("Interview deleted");
       renderList();
     });
     $list.appendChild(el("li", null,
       el("div", {class:"ivname"}, el("b", {text:ivLabel(iv)}),
-        el("small", {text:"Updated " + new Date(iv.updated).toLocaleString([], {dateStyle:"medium", timeStyle:"short"})}),
-        isCur ? el("span", {class:"cur", text:" · Open now"}) : null),
+        el("small", {text:"Updated " + new Date(iv.updated).toLocaleString([], {dateStyle:"medium", timeStyle:"short"})})),
       btnOpen, btnDup, btnDel));
   });
 }
-function openSheet(){ renderList(); $sheet.hidden = false; document.getElementById("sheetClose").focus(); }
-function closeSheet(){ $sheet.hidden = true; }
-$sheet.addEventListener("click", function(e){ if(e.target === $sheet) closeSheet(); });
-document.addEventListener("keydown", function(e){ if(e.key === "Escape" && !$sheet.hidden) closeSheet(); });
-document.getElementById("sheetClose").addEventListener("click", closeSheet);
-document.getElementById("sheetNew").addEventListener("click", function(){ if(startNew()) closeSheet(); });
-document.getElementById("btnList").addEventListener("click", openSheet);
-document.getElementById("btnNew").addEventListener("click", startNew);
+
+document.getElementById("btnHome").addEventListener("click", function(){ showCover(false); });
+document.getElementById("btnNew").addEventListener("click", function(){ showCover(true); });
+
+/* =====================================================================
+   PDF — built right here (no libraries, no network). iPadOS ignores
+   window.print() in Home Screen apps, so on the iPad the Print button
+   hands this PDF to the Share sheet: Print, Save to Files, AirDrop, Mail.
+   ===================================================================== */
+var PDF = (function(){
+  // Helvetica / Helvetica-Bold advance widths for WinAnsi codes 32–255.
+  var WID = {
+    F1:[278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584,350,556,350,222,556,333,1000,556,556,333,1000,667,333,1000,350,611,350,350,222,222,333,333,350,556,1000,333,1000,500,333,944,350,500,667,278,333,556,556,556,556,260,556,333,737,370,556,584,333,737,333,400,584,333,333,333,556,537,278,333,333,365,556,834,834,834,611,667,667,667,667,667,667,1000,722,667,667,667,667,278,278,278,278,722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,556,556,556,556,556,556,889,500,556,556,556,556,278,278,278,278,556,556,556,556,556,556,556,584,611,556,556,556,556,500,556,500],
+    F2:[278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584,350,556,350,278,556,500,1000,556,556,333,1000,667,333,1000,350,611,350,350,278,278,500,500,350,556,1000,333,1000,556,333,944,350,500,667,278,333,556,556,556,556,280,556,333,737,370,556,584,333,737,333,400,584,333,333,333,611,556,278,333,333,365,556,834,834,834,611,722,722,722,722,722,722,1000,722,667,667,667,667,278,278,278,278,722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,556,556,556,556,556,556,889,556,556,556,556,556,278,278,278,278,611,611,611,611,611,611,611,584,611,611,611,611,611,556,611,556]
+  };
+  var WIN = {8364:128,8218:130,402:131,8222:132,8230:133,8224:134,8225:135,710:136,8240:137,352:138,8249:139,338:140,381:142,
+    8216:145,8217:146,8220:147,8221:148,8226:149,8211:150,8212:151,732:152,8482:153,353:154,8250:155,339:156,382:158,376:159};
+  var PW = 612, PH = 792, M = 50, TOP = PH - 50, BOT = 58, CW = PW - 2 * M, FS = 10, LH = 13.5;
+
+  function enc(s){
+    s = String(s == null ? "" : s);
+    if(s.normalize) s = s.normalize("NFC");
+    var o = "";
+    for(var i = 0; i < s.length; i++){
+      var c = s.charCodeAt(i);
+      if(c === 10) o += "\n";
+      else if(c === 9) o += " ";
+      else if(c === 13) continue;
+      else if((c >= 32 && c < 127) || (c >= 160 && c < 256)) o += String.fromCharCode(c);
+      else if(WIN[c]) o += String.fromCharCode(WIN[c]);
+      else { if(c >= 0xD800 && c <= 0xDBFF) i++; o += "?"; }
+    }
+    return o;
+  }
+  function tw(s, f, size){
+    var w = 0, t = WID[f];
+    for(var i = 0; i < s.length; i++){ var c = s.charCodeAt(i); w += (c >= 32 && t[c - 32]) || 556; }
+    return w * size / 1000;
+  }
+  function wrap(s, f, size, maxW){
+    var out = [];
+    s.split("\n").forEach(function(par){
+      var line = "";
+      par.split(/ +/).forEach(function(w){
+        if(!w) return;
+        var t = line ? line + " " + w : w;
+        if(tw(t, f, size) <= maxW){ line = t; return; }
+        if(line){ out.push(line); line = ""; }
+        while(tw(w, f, size) > maxW){
+          var k = w.length - 1;
+          while(k > 1 && tw(w.slice(0, k), f, size) > maxW) k--;
+          out.push(w.slice(0, k)); w = w.slice(k);
+        }
+        line = w;
+      });
+      out.push(line);
+    });
+    while(out.length > 1 && out[out.length - 1] === "") out.pop();
+    return out;
+  }
+  function esc(s){
+    var o = "";
+    for(var i = 0; i < s.length; i++){
+      var ch = s[i], c = s.charCodeAt(i);
+      if(ch === "\\" || ch === "(" || ch === ")") o += "\\" + ch;
+      else if(c < 32 || c > 126) o += "\\" + ("00" + c.toString(8)).slice(-3);
+      else o += ch;
+    }
+    return o;
+  }
+  function n(x){ return String(Math.round(x * 100) / 100); }
+
+  function Doc(){ this.pages = []; this.add(); }
+  Doc.prototype.add = function(){ this.ops = []; this.pages.push(this.ops); this.y = TOP; this.fresh = true; };
+  Doc.prototype.need = function(h){ if(this.y - h < BOT) this.add(); };
+  Doc.prototype.text = function(x, y, s, f, size, gray){
+    this.ops.push((gray || 0) + " g BT /" + f + " " + size + " Tf " + n(x) + " " + n(y) + " Td (" + esc(s) + ") Tj ET");
+  };
+  Doc.prototype.line = function(x1, y1, x2, y2, w, gray){
+    this.ops.push((gray == null ? 0 : gray) + " G " + w + " w " + n(x1) + " " + n(y1) + " m " + n(x2) + " " + n(y2) + " l S");
+  };
+  Doc.prototype.box = function(x, y, on){
+    var s = 8.5, b = y - 1;
+    this.ops.push("0 G 0.8 w " + n(x) + " " + n(b) + " " + s + " " + s + " re S");
+    if(on) this.ops.push("0 G 1.4 w " + n(x + 1.8) + " " + n(b + 1.8) + " m " + n(x + s - 1.8) + " " + n(b + s - 1.8) + " l S " +
+      n(x + 1.8) + " " + n(b + s - 1.8) + " m " + n(x + s - 1.8) + " " + n(b + 1.8) + " l S");
+  };
+  Doc.prototype.bytes = function(title, footer){
+    var total = this.pages.length, objs = [], kids = [], self = this, k;
+    for(k = 0; k < total; k++) kids.push((5 + k * 2) + " 0 R");
+    objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+    objs[2] = "<< /Type /Pages /Kids [" + kids.join(" ") + "] /Count " + total + " >>";
+    objs[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    objs[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+    this.pages.forEach(function(ops, i){
+      self.ops = ops; footer(self, i + 1, total);
+      var stream = ops.join("\n");
+      objs[5 + i * 2] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + PW + " " + PH + "] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents " + (6 + i * 2) + " 0 R >>";
+      objs[6 + i * 2] = "<< /Length " + stream.length + " >>\nstream\n" + stream + "\nendstream";
+    });
+    objs.push("<< /Title (" + esc(enc(title)) + ") /Producer (Preschool Social History form) >>");
+    var info = objs.length - 1;
+    var out = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", offs = [];
+    for(k = 1; k < objs.length; k++){ offs[k] = out.length; out += k + " 0 obj\n" + objs[k] + "\nendobj\n"; }
+    var xref = out.length;
+    out += "xref\n0 " + objs.length + "\n0000000000 65535 f \n";
+    for(k = 1; k < objs.length; k++) out += ("000000000" + offs[k]).slice(-10) + " 00000 n \n";
+    out += "trailer\n<< /Size " + objs.length + " /Root 1 0 R /Info " + info + " 0 R >>\nstartxref\n" + xref + "\n%%EOF\n";
+    var b = new Uint8Array(out.length);
+    for(k = 0; k < out.length; k++) b[k] = out.charCodeAt(k) & 255;
+    return b;
+  };
+
+  function build(iv){
+    var a = iv.answers, d = new Doc();
+    function val(id){ return typeof a[id] === "string" ? a[id] : ""; }
+    function shown(it){ return it.type === "date" ? fmtDate(val(it.id)) : val(it.id); }
+    function row(lh, fn){ d.need(lh); fn(d.y - lh + 3.5); d.y -= lh; }
+    function sep(){
+      if(d.fresh){ d.fresh = false; return; }
+      d.y -= 5; d.line(M, d.y, PW - M, d.y, 0.3, 0.82); d.y -= 4;
+    }
+    function label(t, x, w, f, size, gray){
+      wrap(enc(t), f || "F2", size || FS, w).forEach(function(l){
+        row(LH, function(b){ d.text(x, b, l, f || "F2", size || FS, gray); });
+      });
+    }
+    function drawYN(x, b, v){
+      d.box(x, b, v === "yes"); d.text(x + 12, b, "Yes", v === "yes" ? "F2" : "F1", FS);
+      d.box(x + 40, b, v === "no"); d.text(x + 52, b, "No", v === "no" ? "F2" : "F1", FS);
+    }
+    function textBlock(v, lines, x, w){
+      if(v && v.trim()){
+        wrap(enc(v), "F1", FS, w - 10).forEach(function(l){
+          row(LH, function(b){ d.line(x + 1, b - 3.5, x + 1, b + LH - 3.5, 1.2, 0.6); if(l) d.text(x + 9, b, l, "F1", FS); });
+        });
+      } else {
+        for(var i = 0; i < (lines || 2); i++) row(LH + 3, function(b){ d.line(x, b - 2, x + w, b - 2, 0.4, 0.7); });
+      }
+    }
+    // inline "flow" layout: chunks wrap onto further lines as needed
+    function flow(chunks, x, w){
+      var rows = [], cur = [], cx = 0;
+      chunks.forEach(function(c){
+        if(cur.length && cx + c.w > w){ rows.push(cur); cur = []; cx = 0; }
+        cur.push({c:c, off:cx}); cx += c.w;
+      });
+      if(cur.length) rows.push(cur);
+      var heights = rows.map(function(r){ return Math.max.apply(null, r.map(function(o){ return o.c.n || 1; })) * LH; });
+      var total = heights.reduce(function(p, q){ return p + q; }, 0);
+      if(total <= 12 * LH) d.need(total);       // keep a short option list on one page
+      rows.forEach(function(r){
+        var nl = Math.max.apply(null, r.map(function(o){ return o.c.n || 1; }));
+        d.need(nl * LH);
+        var b = d.y - LH + 3.5;
+        r.forEach(function(o){ o.c.draw(x + o.off, b); });
+        d.y -= nl * LH;
+      });
+    }
+    function cCheck(t, on){
+      var s = enc(t);
+      return {w:12 + tw(s, on ? "F2" : "F1", FS) + 14, draw:function(x, b){ d.box(x, b, on); d.text(x + 12, b, s, on ? "F2" : "F1", FS); }};
+    }
+    function cYN(t, v){
+      var s = enc(t), lw = s ? tw(s, "F2", FS) + 6 : 0;
+      return {w:lw + 90, draw:function(x, b){ if(s) d.text(x, b, s, "F2", FS); drawYN(x + lw, b, v); }};
+    }
+    function cField(t, v, maxW){
+      var s = enc(t), lw = s ? tw(s, "F2", FS) + 5 : 0, avail = Math.max(60, maxW - lw - 16);
+      var vl = v ? wrap(enc(v), "F1", FS, avail - 4) : [""];
+      var vw = Math.min(avail, Math.max(90, Math.max.apply(null, vl.map(function(l){ return tw(l, "F1", FS); })) + 8));
+      return {w:lw + vw + 16, n:vl.length, draw:function(x, b){
+        if(s) d.text(x, b, s, "F2", FS);
+        vl.forEach(function(l, i){
+          var bb = b - i * LH;
+          if(l) d.text(x + lw, bb, l, "F1", FS);
+          d.line(x + lw, bb - 2.5, x + lw + vw, bb - 2.5, 0.5, 0.6);
+        });
+      }};
+    }
+    function optChunks(it){
+      var v = a[it.id], sel = it.single ? (typeof v === "string" ? [v] : []) : (Array.isArray(v) ? v : []);
+      return it.options.map(function(o){ return cCheck(o, sel.indexOf(o) >= 0); });
+    }
+    function inlChunks(p, w){
+      if(p.t === "short") return [cField(p.label, shown(p), w)];
+      if(p.t === "yn") return [cYN(p.label, a[p.id])];
+      if(p.t === "opts") return optChunks(p);
+      return [];
+    }
+    function shortRow(t, v, x, w){
+      var lw = w * 0.48, vx = x + lw + 10, vw = w - lw - 10;
+      var ll = wrap(enc(t), "F2", FS, lw), vl = v ? wrap(enc(v), "F1", FS, vw) : [""];
+      var nr = Math.max(ll.length, vl.length);
+      d.need(LH * Math.min(nr, 3));
+      for(var i = 0; i < nr; i++) (function(i){
+        row(LH, function(b){
+          if(ll[i]) d.text(x, b, ll[i], "F2", FS);
+          if(i < vl.length){ if(vl[i]) d.text(vx, b, vl[i], "F1", FS); d.line(vx, b - 2.5, x + w, b - 2.5, 0.5, 0.6); }
+        });
+      })(i);
+    }
+    function table(it, x, w){
+      var fr = (it.gtc || "").match(/[\d.]+(?=fr)/g);
+      fr = fr && fr.length === it.cols.length ? fr.map(Number) : it.cols.map(function(){ return 1; });
+      var sum = fr.reduce(function(p, q){ return p + q; }, 0);
+      var cw = fr.map(function(f){ return f * w / sum; });
+      var saved = a[it.id], rows = saved && Array.isArray(saved.rows) ? saved.rows.slice() : [];
+      while(rows.length < it.rows) rows.push([]);
+      row(LH, function(b){
+        var cx = x;
+        it.cols.forEach(function(c, i){ d.text(cx, b, wrap(enc(c.label), "F2", 8.5, cw[i] - 6)[0], "F2", 8.5); cx += cw[i]; });
+      });
+      d.line(x, d.y + 1.5, x + w, d.y + 1.5, 0.8, 0);
+      rows.forEach(function(r){
+        var cells = it.cols.map(function(c, i){
+          var v = typeof r[i] === "string" ? r[i] : "";
+          return wrap(enc(c.type === "date" ? fmtDate(v) : v), "F1", 9.5, cw[i] - 8);
+        });
+        var nl = Math.max.apply(null, cells.map(function(c){ return c.length; }));
+        d.need(nl * LH + 3);
+        var b = d.y - LH + 3.5, cx = x;
+        cells.forEach(function(ls, i){
+          ls.forEach(function(l, j){ if(l) d.text(cx, b - j * LH, l, "F1", 9.5); });
+          d.line(cx, d.y - nl * LH, cx + cw[i] - 8, d.y - nl * LH, 0.5, 0.6);
+          cx += cw[i];
+        });
+        d.y -= nl * LH + 3;
+      });
+    }
+    function followup(f, x, w){
+      d.y -= 2;
+      if(f.t === "long"){ label(f.label, x, w, "F1", 9.5, 0.25); textBlock(val(f.id), f.lines, x, w); }
+      else if(f.t === "short") flow([cField(f.label, val(f.id), w)], x, w);
+      else if(f.t === "opts"){ if(f.label) label(f.label, x, w, "F1", 9.5, 0.25); flow(optChunks(f), x, w); }
+      else if(f.t === "table") table(f, x, w);
+    }
+    function item(it, x, w){
+      switch(it.t){
+        case "h":
+          d.y -= 6; d.need(LH * 4);
+          row(LH + 2, function(b){ d.text(x, b, enc(it.label.toUpperCase()), "F2", 9, 0.3); });
+          d.fresh = true;
+          return;
+        case "short": sep(); shortRow(it.label, shown(it), x, w); break;
+        case "long": sep(); d.need(LH * 3); label(it.label, x, w); textBlock(val(it.id), it.lines, x, w); break;
+        case "yn":
+          sep();
+          var ll = wrap(enc(it.label), "F2", FS, w - 84);
+          d.need(LH * Math.min(ll.length + 1, 3));
+          ll.forEach(function(l, i){ row(LH, function(b){ d.text(x, b, l, "F2", FS); if(i === 0) drawYN(x + w - 72, b, a[it.id]); }); });
+          if(it.inl){
+            var ch = [];
+            it.inl.forEach(function(p){ ch = ch.concat(inlChunks(p, w - 16)); });
+            flow(ch, x + 16, w - 16);
+          }
+          break;
+        case "opts": sep(); d.need(LH * 3); label(it.label, x, w); flow(optChunks(it), x + 16, w - 16); break;
+        case "table": sep(); d.need(LH * 4); if(it.label) label(it.label, x, w); table(it, x, w); break;
+        case "group":
+          sep(); d.need(LH * 3); label(it.label, x, w);
+          flow(it.parts.map(function(p){ return cField(p.label + ":", val(p.id), (w - 16) / 2); }), x + 16, w - 16);
+          break;
+      }
+      (it.fu || []).forEach(function(f){ followup(f, x + 16, w - 16); });
+    }
+
+    // ---- cover page
+    row(30, function(b){ d.text(M, b, enc("Preschool Social History"), "F2", 24); });
+    d.line(M, d.y - 4, PW - M, d.y - 4, 1.5, 0);
+    d.y -= 34;
+    [["Student", val("student")], ["Date of questionnaire", fmtDate(val("date"))]].forEach(function(p){
+      row(14, function(b){ d.text(M, b, enc(p[0]), "F1", 10, 0.35); });
+      row(28, function(b){ if(p[1]) d.text(M, b + 2, enc(p[1]), "F2", 20); d.line(M, b - 3, M + 360, b - 3, 0.6, 0.5); });
+      d.y -= 14;
+    });
+    d.y -= 6;
+    row(18, function(b){ d.text(M, b, enc("Interview Information"), "F2", 13); });
+    d.line(M, d.y + 1, PW - M, d.y + 1, 1, 0);
+    d.y -= 6; d.fresh = true;
+    SECTIONS[0].items.forEach(function(it){ if(it.id !== "student" && it.id !== "date") item(it, M, CW); });
+
+    // ---- the questionnaire
+    d.add();
+    SECTIONS.slice(1).forEach(function(sec, i){
+      if(i) d.y -= 16;
+      d.need(90);
+      row(20, function(b){ d.text(M, b, enc(sec.title), "F2", 14); });
+      d.line(M, d.y + 1, PW - M, d.y + 1, 1.2, 0);
+      d.y -= 6; d.fresh = true;
+      sec.items.forEach(function(it){ item(it, M, CW); });
+    });
+
+    var who = enc((val("student") || "Untitled") + (val("date") ? " – " + fmtDate(val("date")) : ""));
+    return d.bytes("Preschool Social History - " + (val("student") || "Untitled"), function(doc, pg, total){
+      doc.line(M, 44, PW - M, 44, 0.4, 0.7);
+      doc.text(M, 32, enc("Preschool Social History · ") + who, "F1", 8, 0.35);
+      var t = "Page " + pg + " of " + total;
+      doc.text(PW - M - tw(t, "F1", 8), 32, t, "F1", 8, 0.35);
+    });
+  }
+  return {build:build};
+})();
 
 /* =====================================================================
    PRINT / EXPORT / IMPORT
    ===================================================================== */
-document.getElementById("btnPrint").addEventListener("click", function(){
-  flushSave();
-  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
-  window.print();
+function isIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+function safeName(s){
+  s = (s || "").trim();
+  if(s.normalize) s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");   // José Núñez -> Jose Nunez
+  return s.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function fileBase(){
+  return "SocialHistory_" + (safeName(A().student) || "Untitled") + "_" + (A().date || todayISO());
+}
+
+var $saveSheet = document.getElementById("saveSheet");
+var $saveOpen = document.getElementById("saveOpen");
+var $saveCopy = document.getElementById("saveCopy");
+var saveUrl = null, saveText = "";
+// Fallback when the Share sheet can't take the file: a link the user taps
+// themselves (a fresh tap always works, even in a Home Screen app).
+function showSaveSheet(blob, name, text){
+  if(saveUrl) URL.revokeObjectURL(saveUrl);
+  saveUrl = URL.createObjectURL(blob);
+  saveText = text || "";
+  $saveOpen.href = saveUrl;
+  if(text) $saveOpen.setAttribute("download", name); else $saveOpen.removeAttribute("download");
+  document.getElementById("saveName").textContent = name;
+  document.getElementById("saveHint").textContent = text
+    ? "Tap Open file to save it, or Copy text and paste it into an email or note."
+    : "Tap Open file, then the Share button to Print, Save to Files, AirDrop or Mail it.";
+  $saveCopy.hidden = !text;
+  $saveSheet.hidden = false;
+}
+document.getElementById("saveClose").addEventListener("click", function(){ $saveSheet.hidden = true; });
+$saveSheet.addEventListener("click", function(e){ if(e.target === $saveSheet) $saveSheet.hidden = true; });
+$saveCopy.addEventListener("click", function(){
+  if(navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(saveText).then(function(){ toast("Copied"); }, function(){ alert("Couldn't copy on this device."); });
+  else alert("Couldn't copy on this device.");
 });
 
-function safeName(s){ return (s || "").trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }
-
-document.getElementById("btnExport").addEventListener("click", function(){
-  flushSave();
-  var a = A();
-  var name = "SocialHistory_" + (safeName(a.student) || "Untitled") + "_" +
-    (a.date || new Date().toISOString().slice(0, 10)) + ".json";
-  var data = {app:"preschool-social-history", version:1, id:cur.id, created:cur.created, updated:cur.updated, answers:a};
-  var blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
-  // iOS: the Share sheet offers Save to Files, AirDrop, and Mail in one place.
-  if(window.File && navigator.canShare){
-    try{
-      var file = new File([blob], name, {type:"application/json"});
-      if(navigator.canShare({files:[file]})){
-        navigator.share({files:[file], title:name}).catch(function(err){
-          if(!err || err.name !== "AbortError") download(blob, name);
-        });
-        return;
-      }
-    }catch(e){}
+// Must run straight from a tap: iOS only opens the Share sheet in response to one.
+function deliver(blob, name, type, text){
+  var file = null;
+  try{ file = new File([blob], name, {type:type}); }catch(e){}
+  var canShare = file && navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}));
+  if(canShare){
+    navigator.share({files:[file], title:name}).catch(function(err){
+      if(err && err.name === "AbortError") return;     // user closed the sheet
+      showSaveSheet(blob, name, text);
+    });
+    return;
   }
-  download(blob, name);
-});
-function download(blob, name){
+  if(isIOS()){ showSaveSheet(blob, name, text); return; }
   var url = URL.createObjectURL(blob);
   var link = el("a", {href:url, download:name});
   document.body.appendChild(link); link.click(); link.remove();
-  setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
+  toast("Saved " + name + " to Downloads");
 }
 
+document.getElementById("btnPrint").addEventListener("click", function(){
+  flushSave();
+  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  if(!isIOS()){ window.print(); return; }
+  var bytes;
+  try{ bytes = PDF.build(cur); }
+  catch(err){ alert("Couldn't build the PDF: " + (err && err.message)); return; }
+  deliver(new Blob([bytes], {type:"application/pdf"}), fileBase() + ".pdf", "application/pdf");
+});
+
+document.getElementById("btnExport").addEventListener("click", function(){
+  flushSave();
+  var text = JSON.stringify({app:"preschool-social-history", version:1, id:cur.id, created:cur.created, updated:cur.updated, answers:A()}, null, 2);
+  deliver(new Blob([text], {type:"application/json"}), fileBase() + ".json", "application/json", text);
+});
+
 var $file = document.getElementById("fileImport");
-document.getElementById("btnImport").addEventListener("click", function(){ $file.value = ""; $file.click(); });
 $file.addEventListener("change", function(){
   var f = $file.files && $file.files[0];
   if(!f) return;
   var rd = new FileReader();
   rd.onload = function(){
+    $file.value = "";
     var data = parse(rd.result);
     var answers = data && cleanAnswers(data.answers);
-    if(!answers){ alert("That file isn't a Social History export."); return; }
+    if(!answers){ alert("That file isn't a Social History export (.json)."); return; }
     var t = new Date().toISOString();
     var iv = {
       id: typeof data.id === "string" && data.id ? data.id : uuid(),
@@ -1162,7 +1572,7 @@ $file.addEventListener("change", function(){
     openIv(iv, true);
     toast(ok ? "Interview imported" : "Imported, but couldn't save to this device");
   };
-  rd.onerror = function(){ alert("Couldn't read that file."); };
+  rd.onerror = function(){ $file.value = ""; alert("Couldn't read that file."); };
   rd.readAsText(f);
 });
 
@@ -1181,15 +1591,12 @@ function cleanAnswers(a){
 }
 
 /* =====================================================================
-   BOOT
+   BOOT — reopen the interview that was on screen, else the cover sheet
    ===================================================================== */
 (function boot(){
-  var id = sGet("current");
-  var iv = id && loadIv(id);
-  if(iv) return openIv(iv, true);
-  var ivs = allIvs();
-  if(ivs.length) return openIv(ivs[0], true);
-  openIv(blankIv(), false);
+  var id = sGet("current"), iv = id && loadIv(id);
+  if(iv && sGet("view") === "form") return openIv(iv, true);
+  showCover(false);
 })();
 if(!storageOK) setSaved("Not saved ⚠ storage unavailable", "bad");
 

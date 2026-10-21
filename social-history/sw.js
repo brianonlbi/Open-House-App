@@ -1,6 +1,6 @@
 /* Caches the form so it opens with no internet. It only ever fetches its own
    files; interview answers live in localStorage and are never sent anywhere. */
-var CACHE = "social-history-v1";
+var CACHE = "social-history-v2";
 var PAGE = "./preschool-social-history.html";
 var ASSETS = ["./", PAGE, "./manifest.webmanifest", "./icon.png"];
 
